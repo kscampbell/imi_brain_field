@@ -1,0 +1,247 @@
+---
+title: "Untitled"
+author: "Kaitlyn Campbell"
+date: "5/25/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r load libraries}
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(tibble)  
+library(tidyverse)
+library(readr)
+library(faintr)
+library(devtools)
+library(rstan)
+library(rstantools)
+library(readr)
+library(tidybayes)
+library(bayesplot)
+```
+```{r import data and manipulate}
+my_data <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/my_data2.csv")
+my_data <- select(my_data, -X1)
+
+my_data <- my_data %>% 
+  mutate(TL_mm = TL_cm*10)
+
+my_data$Wetland_type <- as.factor(my_data$Wetland_type)
+my_data$Site <- as.factor(my_data$Site)
+
+bo <- my_data %>% 
+  filter(Measurement == "1_bulbus_olf_length")
+```
+
+```{r}
+levels(my_data$Site)
+levels(my_data$Wetland_type)
+
+# Rename all levels
+levels(my_data$Site) <- c("Acheson","Buffalo Lake","Habeger", "Lost Lake", "Pettigrew", "Volker")
+levels(my_data$Wetland_type) <- c("Control","Tile")
+
+bo <- my_data %>% 
+  filter(Measurement == "1_bulbus_olf_length")
+
+bo <- bo %>% 
+  rename(type = "Wetland_type")
+```
+
+```{r mass model}
+load(file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/m_mass1.1.rda")
+
+m_mass1.1 <- brm(Body_mass_g ~ Wetland_type, data = bo, family = Gamma(link = "log"), 
+          prior=c(prior(normal(2.5, 2), class=Intercept),
+                  prior(normal(0, 2), class = b),
+                  prior(gamma(0.01,0.01), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, control = list(adapt_delta = 0.999), 
+          save_pars = save_pars(all = TRUE))
+```
+
+
+# Extract posteriors
+```{r}
+set.seed(4545)
+post_1 <- posterior_samples(m_mass1.1)  # puts chains of model into data frame
+head(post_1)
+nrow(post_1) # 6000
+```
+
+# Compute averages for each treatment category
+```{r}
+as_tibble(post_1) %>% 
+  mutate(iteration = 1:nrow(post_1))
+
+# Reference
+mu_ref_mass <- data.frame(value = exp(post_1$b_Intercept), type = "Reference", iter = 1:nrow(post_1)) 
+
+# Tile
+mu_tile_mass <- data.frame(value = exp(post_1$b_Intercept + post_1$b_Wetland_typetile), type = "Tile", iter = 1:nrow(post_1))
+
+mu_mass <- rbind(mu_ref_mass, mu_tile_mass)
+```
+
+# summarize
+```{r}
+summary <- mu_mass %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median= median(value),
+            sd = sd(value),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945),
+            low95 = quantile(value, probs = 0.025),
+            high95 = quantile(value, probs = 0.975)) %>%
+  mutate_if(is.numeric,round,2)
+summary
+
+view(summary)
+```
+  type       mean median    sd low89 high89 low95 high95
+1 Reference  14.4   14.3  1.35  12.4   16.7  12.0   17.4
+2 Tile       15.8   15.8  1.51  13.6   18.4  13.2   19.1
+
+# differences?
+```{r}
+diff_ct <- mu_tile_mass$value - mu_ref_mass$value
+mean(diff_ct) # 1.430934 g
+quantile(diff_ct,probs=c(0.025,0.975)) # (-2.522099, 5.400463)
+quantile(diff_ct,probs=c(0.055,0.945)) # (-1.633938, 4.653148)
+sum(diff_ct>0)/6000 # 0.7686667
+```
+
+# make plot
+```{r}
+bo$type2<-ifelse(bo$Wetland_type=="control", "Reference", "Tile")
+bo$type2 <- as.factor(bo$type2)
+
+mu_mass %>%
+  ggplot(aes(x = type, y = value, fill = type)) +
+  geom_violin(position = "dodge") +
+  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_point(data = bo, aes(x=type2, y=Body_mass_g, fill= type2), position = position_jitterdodge(seed = 1, dodge.width =0.9)) +
+  labs(x = "Wetland Type", 
+       y = "Body Mass (g)",
+       fill= "Wetland Type") +
+  theme(text= element_text(size=20), plot.title = element_text(face = "bold"), plot.caption = element_text(size=10)) +
+  theme_classic() + theme(plot.caption = element_text(hjust = 0, size=8)) +
+  theme(axis.text.x = element_text(color="black", size="10"))+
+  theme(axis.text.y = element_text(color="black", size="10"))+
+  theme(legend.title = element_text(face="bold", size="10"))
+
+
+# use light and dark grey to represent control vs tile
+cp <- c("gray83", "grey55")
+
+mass_p <- mu_mass %>%
+  ggplot(aes(x = type, y = value, fill = type)) +
+  geom_violin(position = "dodge") +
+  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_point(data = bo, aes(x=type2, y=Body_mass_g, fill= type2), shape = 1, size = 1, position = position_jitterdodge(seed = 1, dodge.width =0.9)) +
+  labs(x = "Site", 
+       y = "Body Mass (g)",
+       fill= "Wetland Type") +
+    theme(text= element_text(size=20), 
+        plot.title = element_text(face = "bold", hjust = 0.5), 
+        plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  scale_fill_manual(values=cp) +
+  theme(plot.caption = element_text(hjust = 0, size=8))
+mass_p
+
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/mass_p.tiff", mass_p, dpi=400, width=5, height=3, units="in")
+```
+
+
+##### TL ##### 
+```{r m_tl5_mm model}
+load(file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/m_tl5_mm.rda")
+
+
+m_tl5_mm <- brm(TL_mm ~ Wetland_type + (1|Animal_ID), data = bo, family = Gamma(link = "log"), 
+          prior=c(prior(normal(3, 3), class=Intercept),
+                  prior(normal(0, 3), class = b),
+                  prior(cauchy(0, 1), class= sd),
+                  prior(gamma(0.01,0.01), class="shape")),
+          iter = 3000 , warmup = 700, chains = 4, cores = 4,
+          seed = 5, control = list(adapt_delta = 0.999), 
+          save_pars = save_pars(all = TRUE))
+```
+
+# Extract posteriors
+```{r}
+set.seed(4545)
+post_2 <- posterior_samples(m_tl5_mm)  # puts chains of model into data frame
+head(post_2)
+nrow(post_2) # 9200
+```
+# Compute averages for each treatment category
+```{r}
+as_tibble(post_2) %>% 
+  mutate(iteration = 1:nrow(post_2))
+
+# reference wetlands
+mu_tl_ref <- data.frame(value = exp(post_2$b_Intercept), type = "Reference", iter = 1:nrow(post_2)) 
+
+# tile wetlands
+mu_tl_tile <- data.frame(value = exp(post_2$b_Intercept + post_2$b_Wetland_typetile), type = "Tile", iter = 1:nrow(post_2)) 
+
+mu_tl <- rbind(mu_tl_ref, mu_tl_tile)
+```
+```{r}
+mu_tl_summary <- mu_tl %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median= median(value),
+            sd = sd(value),
+            low95 = quantile(value, probs = 0.025),
+            high95 = quantile(value, probs = 0.975),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945)) %>%
+  mutate_if(is.numeric,round,2)
+
+mu_tl_summary
+```
+  type       mean median    sd low95 high95 low89 high89
+1 Reference  57.7   57.7  2.05  53.8   61.9  54.5   61.1
+2 Tile       60.8   60.7  2.06  56.8   64.9  57.5   64.2
+
+# differences?
+```{r}
+diff_ct_tl <- mu_tl_tile$value - mu_tl_ref$value
+mean(diff_ct_tl) # 3.020575 mm
+quantile(diff_ct_tl,probs=c(0.025,0.975)) # (-2.490823, 8.602962)
+quantile(diff_ct_tl,probs=c(0.055,0.945)) # (-1.542854, 7.578885)
+sum(diff_ct_tl>0)/9200 # 0.8569565
+```
+# Make plot
+```{r}
+# use light and dark grey to represent control vs tile
+cp <- c("gray83", "grey55")
+
+bo$type2<-ifelse(bo$Wetland_type=="control", "Reference", "Tile")
+bo$type2 <- as.factor(bo$type2)
+
+tl_p <- mu_tl %>%
+  ggplot(aes(x = type, y = value, fill = type)) +
+  geom_violin(position = "dodge") +
+  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_point(data = bo, aes(x=type2, y=TL_mm, fill= type2), shape = 1, size = 1, position = position_jitterdodge(seed = 1, dodge.width =0.9)) +
+  labs(x = "Wetland Type", 
+       y = "Total Body Length (mm)",
+       fill= "Wetland Type") +
+  theme(text= element_text(size=20), 
+        plot.title = element_text(face = "bold", hjust = 0.5), 
+        plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  scale_fill_manual(values=cp) +
+  theme(plot.caption = element_text(hjust = 0, size=8))
+tl_p
+
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/tl_p.tiff", tl_p, dpi=400, width=5, height=3, units="in")
+```
+

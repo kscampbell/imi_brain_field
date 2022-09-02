@@ -1,0 +1,362 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# load packages
+```{r}
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(tibble)  
+library(tidyverse)
+library(devtools)
+library(rstan)
+library(rstantools)
+library(tidybayes)
+library(bayesplot)
+```
+```{r load data}
+my_data <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/my_data2.csv")
+
+# read csv from laptop:
+my_data <- read_csv("/Users/kaitlyncampbell/Documents/Chapter4_Brains_IMI/my_data2.csv")
+
+# laptop:
+# remove weird extra row named '...1'
+my_data <- select(my_data, -'...1')
+
+# remove weird extra row named 'X1'
+my_data <- select(my_data, -X1)
+
+# make Wetland_type, Site, and Measurement a factor
+my_data$Wetland_type <- as.factor(my_data$Wetland_type)
+my_data$Site <- as.factor(my_data$Site)
+my_data$Measurement <- as.factor(my_data$Measurement)
+
+cerebellum_d <- my_data %>% 
+  filter(Measurement == '15_cerebellum_length') %>% 
+  mutate(Average_length_mm = (Average_length*10),
+         TL_mm = (TL_cm*10),
+         Length_mm_STD = (Average_length_mm/TL_mm))
+```
+
+```{r}
+cerebellum_d %>% 
+  group_by(Wetland_type) %>% 
+  summarize(mean = mean(Length_mm_STD))
+```
+
+
+```{r model c1}
+c1 <- brm(Length_mm_STD ~ Wetland_type, data = cerebellum_d, family = Gamma(link = "log"), 
+           prior=c(prior(normal(-4.4, 1), class=Intercept),
+                   prior(normal(-1, 1), class=b, coef="Wetland_typetile"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+print(c1)
+plot(conditional_effects(c1), points = TRUE)
+
+pp_check(c1, type = "boxplot", notch=FALSE)
+pp_check(c1, type='stat', stat='mean')
+pp_check(c1, type="hist")
+pp_check(c1, nsamples=100)
+
+cerebellum_d %>%
+  tidybayes::add_predicted_draws(model = c1, n = 100) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = cerebellum_d,
+            mapping = aes(x = Length_mm_STD, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('Length_mm_STD density ')),
+       title = 'Length_mm_STD density, actual versus predicted')
+
+loo_c1 <- loo(c1, save_psis = TRUE, cores = 2, moment_match = TRUE)
+print(loo_c1) # p_loo = 3.2 ; SE = 1.0
+
+yrep <- posterior_predict(c1)
+ppc_loo_pit_overlay(cerebellum_d$Length_mm_STD, 
+                    yrep = yrep, 
+                    lw = weights(loo_c1$psis_object))
+
+ppc_intervals(cerebellum_d$Length_mm_STD, yrep = yrep)
+ppc_stat(cerebellum_d$Length_mm_STD, yrep = yrep, stat = "mean")
+ppc_stat(cerebellum_d$Length_mm_STD, yrep = yrep, stat = "sd")
+ppc_stat_grouped(cerebellum_d$Length_mm_STD, group=cerebellum_d$Wetland_type, yrep = yrep, stat = "mean")
+ppc_stat_grouped(cerebellum_d$Length_mm_STD, group=cerebellum_d$Wetland_type, yrep = yrep, stat = "sd") # overestimates sd of tile wetlands
+
+#save(c1, file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/c1.rda")
+
+#load("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/c1.rda")
+```
+
+```{r c2 model}
+c2 <- brm(Length_mm_STD ~ Wetland_type, data = cerebellum_d, family = Gamma(link = "log"), 
+           prior=c(prior(normal(-4.4, 1.1), class=Intercept),
+                   prior(normal(-1.1, 0.5), class=b, coef="Wetland_typetile"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+print(c2)
+plot(conditional_effects(c2), points = TRUE)
+
+pp_check(c2, type = "boxplot", notch=FALSE)
+pp_check(c2, type='stat', stat='mean')
+pp_check(c2, type="hist")
+pp_check(c2, nsamples=100)
+
+cerebellum_d %>%
+  tidybayes::add_predicted_draws(model = c2, n = 100) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = cerebellum_d,
+            mapping = aes(x = Length_mm_STD, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('Length_mm_STD density ')),
+       title = 'Length_mm_STD density, actual versus predicted')
+
+loo_c2 <- loo(c2, save_psis = TRUE, cores = 2, moment_match = TRUE)
+print(loo_c2) # p_loo = 3.1 ; SE = 1.0
+
+yrep <- posterior_predict(c2)
+ppc_loo_pit_overlay(cerebellum_d$Length_mm_STD, 
+                    yrep = yrep, 
+                    lw = weights(loo_c2$psis_object))
+
+ppc_intervals(cerebellum_d$Length_mm_STD, yrep = yrep)
+ppc_stat(cerebellum_d$Length_mm_STD, yrep = yrep, stat = "mean")
+ppc_stat(cerebellum_d$Length_mm_STD, yrep = yrep, stat = "sd")
+ppc_stat_grouped(cerebellum_d$Length_mm_STD, group=cerebellum_d$Wetland_type, yrep = yrep, stat = "mean")
+ppc_stat_grouped(cerebellum_d$Length_mm_STD, group=cerebellum_d$Wetland_type, yrep = yrep, stat = "sd")
+
+#save(c2, file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/c2.rda")
+
+load("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/c2.rda")
+```
+
+```{r}
+c2.5 <- brm(Length_mm_STD ~ Wetland_type, data = cerebellum_d, family = Gamma(link = "log"), 
+           prior=c(prior(normal(-4.4, 1.1), class=Intercept),
+                   prior(normal(-5, 0.5), class=b, coef="Wetland_typetile"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, save_pars = save_pars(all = TRUE))
+
+print(c2.5)
+plot(conditional_effects(c2.5), points = TRUE)
+pp_check(c2.5, type = "boxplot", notch=FALSE)
+pp_check(c2.5, type='stat', stat='mean')
+pp_check(c2.5, type="hist")
+pp_check(c2.5, nsamples=100)
+
+post_c25 <- posterior_samples(c2.5)    # puts chains of model into data frame
+head(post_c25)
+nrow(post_c25) # 6000
+
+as_tibble(post_c25) %>% 
+  mutate(iteration = 1:nrow(post_c25))
+
+r_cer_c25 <- data.frame(value = (exp(post_c25$b_Intercept)), type = "Reference", iter = 1:nrow(post_c25))
+
+t_cer_c25 <- data.frame(value = (exp(post_c25$b_Intercept + post_c25$b_Wetland_typetile)), type = "Tile", iter = 1:nrow(post_c25))
+
+cerebellum_wtlnd25 <- rbind(r_cer_c25, t_cer_c25)
+
+# get averages
+cerebellum_wtlnd25 %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median = median(value),
+            sd = sd(value),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945)) %>%
+  mutate_if(is.numeric,round,3)
+
+# probability of a difference btwn length at ref and tile sites
+diff_c25 <- (r_cer_c25$value) - (t_cer_c25$value)
+mean(diff_c25)  # 0.004582251
+sd(diff_c25) # 0.001578901
+quantile(diff_c25,probs=c(0.055,0.945))  # (0.002295971, 0.007253905)
+sum(diff_c25>0)/6000  # 0.9996667
+
+# add colors
+cp <- c("gray83", "grey55")
+
+cerebellum_d$type2<-ifelse(cerebellum_d$Wetland_type=="control", "Reference", "Tile")
+cerebellum_d$type2 <- as.factor(cerebellum_d$type2)
+
+cerebellum_wtlnd_plot25 <- cerebellum_wtlnd25 %>% 
+  ggplot(aes(x = type, y = value, fill = type)) +
+  geom_violin(position = "dodge") + 
+  #scale_y_log10() +
+  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_jitter(data=cerebellum_d, aes(x=type2, y=Length_mm_STD, fill=type2), shape=21, alpha=0.6, width=0.25) +
+  labs(x = "Wetland Type", 
+       y = "Cerebellum Length (mm)",
+       fill= "Wetland Type") +
+  theme(text= element_text(size=20), plot.title = element_text(face = "bold", hjust = 0.5), plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  scale_fill_manual(values=cp) +
+  theme(plot.caption = element_text(hjust = 0, size=8))
+cerebellum_wtlnd_plot25
+
+# save plot
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/cerebellum_wtlnd_plot.tiff", cerebellum_wtlnd_plot, dpi=400, width=5, height=3, units="in")
+```
+  type       mean median    sd low89 high89
+1 Reference 0.014  0.014 0.001 0.012  0.017
+2 Tile      0.01   0.01  0.001 0.009  0.011
+
+```{r}
+compare_m <- loo_compare(loo_c1, loo_c2) # smaller looic = better model
+print(compare_m)
+print(compare_m, simplify = FALSE, digits = 3)
+```
+   elpd_diff se_diff  elpd_loo se_elpd_loo p_loo    se_p_loo looic    se_looic
+c1    0.000     0.000  194.641    6.432       3.156    0.971 -389.283   12.864
+c2   -0.016     0.333  194.626    6.536       3.107    0.985 -389.251   13.072
+# the difference between these 2 models is negligible so let's use c2 as the final model (Sept 8, 2021)
+
+# prior sensitivity analysis:
+```{r}
+c3 <- brm(Length_mm_STD ~ Wetland_type, data = cerebellum_d, family = Gamma(link = "log"), 
+           prior=c(prior(normal(-4.4, 2), class=Intercept),
+                   prior(normal(-1.1, 2), class=b, coef="Wetland_typetile"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, save_pars = save_pars(all = TRUE))
+
+print(c3)
+plot(conditional_effects(c3), points = TRUE)
+
+post_c3 <- posterior_samples(c3)    # puts chains of model into data frame
+head(post_c3)
+nrow(post_c3) # 6000
+
+as_tibble(post_c3) %>% 
+  mutate(iteration = 1:nrow(post_c3))
+
+r_cer_c3 <- data.frame(value = (exp(post_c3$b_Intercept)), type = "Reference", iter = 1:nrow(post_c3))
+
+t_cer_c3 <- data.frame(value = (exp(post_c3$b_Intercept + post_c3$b_Wetland_typetile)), type = "Tile", iter = 1:nrow(post_c3))
+
+cerebellum_wtlnd3 <- rbind(r_cer_c3, t_cer_c3)
+
+# get averages
+cerebellum_wtlnd3 %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median = median(value),
+            sd = sd(value),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945)) %>%
+  mutate_if(is.numeric,round,3)
+
+# probability of a difference btwn length at ref and tile sites
+diff_c3 <- (r_cer_c3$value) - (t_cer_c3$value)
+mean(diff_c3)  # 0.001689385
+sd(diff_c3) # 0.001288668
+quantile(diff_c3,probs=c(0.055,0.945))  # (-0.000317273, 0.003737206)
+sum(diff_c3>0)/6000  # 0.911
+```
+  type       mean median    sd low89 high89
+1 Reference 0.012  0.012 0.001 0.011  0.014
+2 Tile      0.011  0.011 0.001 0.01   0.012
+
+
+# Extract posteriors
+```{r}
+post_c2 <- posterior_samples(c2)    # puts chains of model into data frame
+head(post_c2)
+nrow(post_c2) # 6000
+```
+
+```{r compute averages for post_c2}
+as_tibble(post_c2) %>% 
+  mutate(iteration = 1:nrow(post_c2))
+
+r_cer_c2 <- data.frame(value = (exp(post_c2$b_Intercept)), type = "Reference", iter = 1:nrow(post_c2))
+
+t_cer_c2 <- data.frame(value = (exp(post_c2$b_Intercept + post_c2$b_Wetland_typetile)), type = "Tile", iter = 1:nrow(post_c2))
+
+cerebellum_wtlnd <- rbind(r_cer_c2, t_cer_c2)
+```
+
+```{r summary stats for cer_wtlnd}
+cerebellum_wtlnd_summary <- cerebellum_wtlnd %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median = median(value),
+            sd = sd(value),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945)) %>%
+  mutate_if(is.numeric,round,3)
+cerebellum_wtlnd_summary
+```
+  type        mean median sd   low89 high89
+1 Reference 0.013  0.012 0.001 0.011  0.014
+2 Tile      0.011  0.011 0.001 0.009  0.012
+
+# Visualize probability mass - IMI_brain at ref and tile wetlands
+```{r}
+# add colors
+cp <- c("gray83", "grey55")
+
+cerebellum_d$type2<-ifelse(cerebellum_d$Wetland_type=="control", "Reference", "Tile")
+cerebellum_d$type2 <- as.factor(cerebellum_d$type2)
+
+cerebellum_wtlnd_plot <- cerebellum_wtlnd %>% 
+  ggplot(aes(x = type, y = value, fill = type)) +
+  geom_violin(position = "dodge") + 
+  #scale_y_log10() +
+  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_jitter(data=cerebellum_d, aes(x=type2, y=Length_mm_STD, fill=type2), shape=21, alpha=0.6, width=0.25) +
+  labs(x = "Wetland Type", 
+       y = "Cerebellum Length (mm)",
+       fill= "Wetland Type") +
+  theme(text= element_text(size=20), plot.title = element_text(face = "bold", hjust = 0.5), plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  scale_fill_manual(values=cp) +
+  theme(plot.caption = element_text(hjust = 0, size=8))
+cerebellum_wtlnd_plot
+
+# save plot
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/cerebellum_wtlnd_plot.tiff", cerebellum_wtlnd_plot, dpi=400, width=5, height=3, units="in")
+```
+
+# probability of a difference btwn length at ref and tile sites
+```{r}
+diff_c2 <- (r_cer_c2$value) - (t_cer_c2$value)
+mean(diff_c2)  # 0.002177714
+sd(diff_c2) # 0.001277057
+quantile(diff_c2,probs=c(0.055,0.945))  # (0.0001625846 , 0.0042425052)
+sum(diff_c2>0)/6000  # 0.9581667
+```
+
+```{r}
+my_data <- my_data %>% 
+  mutate(Average_length_mm = (Average_length*10),
+         TL_mm = (TL_cm*10),
+         Length_mm_STD = (Average_length_mm/TL_mm))
+
+ggplot(my_data, aes(x=Wetland_type, y=Length_mm_STD)) + geom_violin() + geom_jitter(size=0.5) + facet_wrap(~Measurement)
+```
+
