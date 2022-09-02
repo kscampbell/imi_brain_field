@@ -1,0 +1,583 @@
+---
+title: "Untitled"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+IMI field study (2019) -- liver results
+
+```{r load packages}
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(tibble)  
+library(tidyverse)
+library(devtools)
+library(rstan)
+library(rstantools)
+library(bayesplot)
+library(loo)
+```
+
+```{r read data}
+d <- read_csv("/Users/kaitlyncampbell/Documents/USD/Chapter4_Brains_IMI/Field/UNL_imi_liver_data.csv")
+
+# change to factor
+d$Wetland_type <- as.factor(d$Wetland_type)
+d$Sample_ID <- as.factor(d$Sample_ID)
+
+# Add 0.000001 to imi brain values so it can be used in a gamma distribution (gamma models can't handle 0 values and one of the frogs had 0 ng/mg protein of imi in its brain)
+d <- d %>% 
+  mutate(Liver_imi_desnitro_ng_g_dwt = Liver_imi_desnitro_ng_g_dwt + 0.000001)
+
+d <- d %>% 
+  mutate(Brain_imi_pg_mg_protein = Brain_imi_pg_mg_protein + 0.000001)
+```
+
+```{r plot raw data}
+ggplot(d, aes(x=Brain_imi_pg_mg_protein, y=Liver_imi_desnitro_ng_g_dwt, color=Sample_ID)) + geom_point()
+
+ggplot(d, aes(x=Body_mass_g, y=Liver_imi_desnitro_ng_g_dwt)) + geom_point() + geom_smooth()
+
+ggplot(d, aes(x=TL_mm, y=Liver_imi_desnitro_ng_g_dwt)) + geom_point() + geom_smooth()
+
+ggplot(d, aes(x=Wetland_type, y=Liver_imi_desnitro_ng_g_dwt)) + geom_boxplot()
+```
+
+```{r prior simulation}
+# density of raw data
+plot(density(d$Liver_imi_desnitro_ng_g_dwt))
+plot(hist(d$Liver_imi_desnitro_ng_g_dwt))
+plot(hist(d$Brain_imi_pg_mg_protein))
+
+dt <- d %>% 
+  filter(Wetland_type == 'Tile')
+plot(density(dt$Liver_imi_desnitro_ng_g_dwt))
+
+plot(hist(rexp(100, 0.25))) # range from 0-4; sounds reasonable
+plot(hist(rexp(100, 1)))
+
+
+x.max = qgamma(0.999, shape=4.0, scale=0.5)
+x = seq(from=0, to=x.max, by=x.max/1000)
+dens = dgamma(x, shape=4.0, scale=0.5)
+plot(x, dens, type='l')
+
+# prior probability of this parameter being less than 5.0 or greater than 30.0 is about 0.0003 and 0.07, respectively:
+pgamma(0.5, shape=5.0, scale=0.5, lower.tail=T) # 0.003659847
+pgamma(8, shape=5.0, scale=0.5, lower.tail=F) # 3.624301e-09
+
+
+y_true <- exp(-2) # exp(0) comes from the intercept prior of (0,0.5)
+set.seed(1)
+plot(density(rgamma(100, rate=0.25 / y_true, shape= 6))) # Values ranged from 0 to ~50 which is within the range of IMI_ole values (0 to ~25)
+
+plot(hist(rskew_normal(100, mu = 0, sigma = 1, alpha = 1, xi = NULL, omega = NULL)))
+
+plot(hist(rskew_normal(100, mu = 0, sigma = 1, alpha = -1, xi = NULL, omega = NULL)))
+```
+
+```{r brms model for imi liver x wetland type}
+mliver_1 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(0, 1), class=Intercept),
+                  prior(normal(0, 1), class = b),
+                  prior(exponential(1), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+
+# estimates + model checks
+print(mliver_1)
+conditional_effects(mliver_1)
+
+pp_check(mliver_1, type = "boxplot", notch=FALSE)
+pp_check(mliver_1, type="hist")
+
+pp_check(mliver_1, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(mliver_1, type = "dens_overlay", resp = "Intercept", ndraws=100)
+pp_check(mliver_1, type = "dens_overlay", resp = "Wetland_typeTile", ndraws=100)
+```
+This model overestimates the range of IMI_desnitro in amphibian livers at reference sites (i.e., the intercept).
+
+Let's try again with a smaller sd on the intercept for model #2
+```{r m_liver 2 model}
+mliver_2 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 0.5), class=Intercept),
+                  prior(normal(2, 1), class = b),
+                  prior(gamma(1, 1), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+
+# save the model
+#save(mliver_2, file = "/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/mliver_2.rda")
+
+# estimates + model checks
+print(mliver_2)  # much smaller error on intercept compared to mliver_1
+conditional_effects(mliver_2)
+
+pp_check(mliver_2, type = "boxplot", notch=FALSE)
+pp_check(mliver_2, type="hist")
+
+pp_check(mliver_2, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(mliver_2, type = "dens_overlay", resp = "Intercept", ndraws=100)
+pp_check(mliver_2, type = "dens_overlay", resp = "Wetland_typeTile", ndraws=100)
+
+loo_mliver_2 <- loo(mliver_2, save_psis = TRUE, cores = 2, moment_match = TRUE)
+print(loo_m21) # ok = 1 ; p_loo = 5.2 , se = 2.5
+yrep <- posterior_predict(m21)
+ppc_loo_pit_overlay(bol_imi_brain$IMI_brain_ng_mg_protein, 
+                    yrep = yrep, 
+                    lw = weights(loo_m21$psis_object))
+```
+```{r mliver_3 model}
+mliver_3 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 0.5), class=Intercept),
+                  prior(normal(2, 1), class = b),
+                  prior(exponential(1), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+conditional_effects(mliver_3)
+
+load("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/mliver_3.rda")
+
+save(mliver_3, file = "/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/mliver_3.rda")
+print(mliver_3)
+
+conditional_effects(mliver_3)
+
+pp_check(mliver_3, type = "boxplot", notch=FALSE)
+pp_check(mliver_3, type="hist")
+
+pp_check(mliver_3, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(mliver_3, type = "dens_overlay", resp = "Intercept", ndraws=100)
+pp_check(mliver_3, type = "dens_overlay", resp = "Wetland_typeTile", ndraws=100)
+
+d %>%
+  tidybayes::add_predicted_draws(object = mliver_3, ndraws = 100) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = d,
+            mapping = aes(x = Liver_imi_desnitro_ng_g_dwt, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('IMI des-nitro liver density ')),
+       title = 'IMI des-nitro liver, actual versus predicted') 
+#+
+  facet_wrap(~ Wetland_type)
+```
+```{r skew-normal model}
+mliver_4_prior <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = skew_normal(),
+                prior=c(prior(normal(0, 0.5), class=Intercept),
+                        prior(normal(2, 1), class = b, coef="Wetland_typeTile"),
+                        prior(cauchy(0, 1), class = sigma),
+                        prior(normal(-1, 1), class= alpha)),
+               iter = 2000, warmup = 500, chains = 4, cores = 4,
+               seed = 5, save_pars = save_pars(all = TRUE), sample_prior = "only")
+print(mliver_4_prior)
+conditional_effects(mliver_4_prior)
+
+mliver_4 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = skew_normal(),
+                prior=c(prior(normal(0, 0.5), class=Intercept),
+                        prior(normal(2, 1), class = b, coef="Wetland_typeTile"),
+                        prior(cauchy(0, 1), class = sigma),
+                        prior(normal(-1, 1), class= alpha)),
+               iter = 2000, warmup = 500, chains = 4, cores = 4,
+               seed = 5, save_pars = save_pars(all = TRUE))
+
+print(mliver_4)
+conditional_effects(mliver_4)
+pp_check(mliver_4, type = "boxplot", notch=FALSE)
+pp_check(mliver_4, type="hist")
+
+pp_check(mliver_4, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(mliver_4, type = "dens_overlay", resp = "Intercept", ndraws=100)
+pp_check(mliver_4, type = "dens_overlay", resp = "Wetland_typeTile", ndraws=100)
+
+
+d %>%
+  tidybayes::add_predicted_draws(object = mliver_4, ndraws = 250) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = d,
+            mapping = aes(x = Liver_imi_desnitro_ng_g_dwt, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('IMI des-nitro liver density ')),
+       title = 'IMI des-nitro liver, actual versus predicted') 
+#+ facet_wrap(~ Wetland_type)
+```
+# α is the skewness parameter. If α=0, the skew-normal distribution becomes the gaussian distribution. For location shift models, y can be any real value. 
+# α < 0 = left-skewed distribution; α > 0 = right-skewed distribution
+# ω  is the positive scale parameter
+# ξ  is the location parameter
+# erf  denotes the error function of the gaussian distribution
+
+# mu represents the mean
+# sigma represents standard deviation
+# alpha represents the skewness
+
+```{r}
+get_prior(Liver_imi_desnitro_ng_g_dwt ~ 0 + Wetland_type, data = d, family = skew_normal())
+
+mliver_5 <- brm(Liver_imi_desnitro_ng_g_dwt ~ 0 + Wetland_type, data = d, family = skew_normal(),
+                prior=c(prior(normal(0, 0.5), class=b, lb=0),
+                        prior(normal(1, 1), class = b, coef="Wetland_typeTile"),
+                        prior(cauchy(0, 1), class = sigma),
+                        prior(normal(-1, 1), class= alpha)),
+               iter = 2000, warmup = 500, 
+               chains = 4, cores = 4, seed = 5, 
+               save_pars = save_pars(all = TRUE))
+print(mliver_5)
+conditional_effects(mliver_5)
+pp_check(mliver_5, type = "boxplot", notch=FALSE)
+pp_check(mliver_5, type="hist")
+
+pp_check(mliver_5, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(mliver_5, type = "dens_overlay", resp = "Wetland_typeReference", ndraws=100)
+pp_check(mliver_5, type = "dens_overlay", resp = "Wetland_typeTile", ndraws=100)
+
+d %>%
+  tidybayes::add_predicted_draws(object = mliver_5, ndraws = 250) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = d,
+            mapping = aes(x = Liver_imi_desnitro_ng_g_dwt, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('IMI des-nitro liver density ')),
+       title = 'IMI des-nitro liver, actual versus predicted') 
+#+ facet_wrap(~ Wetland_type)
+```
+
+# extract posterior samples
+```{r}
+posts <- mliver_4$data %>%  # uses the raw data contained in the model file
+  modelr::data_grid(Wetland_type) %>%  # from modelr. creates a grid of data points to predict over
+  tidybayes::add_epred_draws(mliver_4)  # from bayesplot. for each point on the grid, samples a bunch of draws (i.e., iterations) of the outcome variable
+```
+
+# summarize and plot the posteriors
+```{r}
+posts %>%
+  ggplot() +
+  geom_violin(aes(x = Wetland_type, y = .epred), position = "dodge") +
+  geom_boxplot(aes(x=Wetland_type, y=.epred), 
+             outlier.shape = NA, width = 0.1, 
+             position = position_dodge(0.9)) +
+  geom_jitter(data = mliver_4$data, 
+              aes(x=Wetland_type, y = Liver_imi_desnitro_ng_g_dwt), 
+              shape=21, size=1.5, alpha=0.6, 
+              width=0.05, fill="grey52") +
+  theme_classic() +
+  labs(x = "Wetland Type",
+       y = "IMI des-nitro Liver",
+       color = "Concentration (µg/L)") +
+  theme(axis.text.x = element_text(color="black", size="10")) +
+  theme(axis.text.y = element_text(color="black", size="10")) +
+  theme(legend.title = element_text(face="bold", size="10"))
+```
+```{r}
+summary <- posts %>%
+  group_by(Wetland_type) %>%
+  tidybayes::median_qi(.epred)
+summary
+```
+
+#######
+
+```{r m1}
+m1_prior <- brm(Liver_imi_desnitro_ng_g_dwt ~ Brain_imi_pg_mg_protein, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-1, 1), class=Intercept),
+                  prior(normal(0, 1), class = b),
+                  prior(gamma(1,3), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE), sample_prior="only")
+conditional_effects(m1_prior)
+
+ggplot(d, aes(x=Brain_imi_pg_mg_protein, y=Liver_imi_desnitro_ng_g_dwt)) + geom_point() + geom_smooth(method="lm")
+
+m1 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Brain_imi_pg_mg_protein, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(0, 1), class=Intercept),
+                  prior(normal(0, 1), class = b),
+                  prior(gamma(6, 4), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+
+conditional_effects(m1)
+print(m1)
+pp_check(m1, type = "boxplot", notch=FALSE)
+pp_check(m1, type="hist")
+pp_check(m1, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(m1, type = "dens_overlay", resp = "Brain_imi_pg_mg_protein", ndraws=100)
+pp_check(m1, type = "dens_overlay", resp = "Intercept", ndraws=100)
+
+
+m0.5 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Brain_imi_pg_mg_protein + (1|Wetland_type), data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 0.05), class=Intercept),
+                  prior(normal(-0.25, 0.25), class = b),
+                  prior(gamma(1,3), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+conditional_effects(m0.5) #liver conc 0-0.8
+pp_check(m0.5, type = "boxplot", notch=FALSE)
+pp_check(m0.5, type="hist")
+pp_check(m0.5, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(m0.5, type = "dens_overlay", resp = "Brain_imi_pg_mg_protein", ndraws=100)
+pp_check(m0.5, type = "dens_overlay", resp = "Intercept", ndraws=100)
+
+save(m0.5, file = "/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m0.5.rda")
+
+load("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m0.5.rda")
+
+m1 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Brain_imi_pg_mg_protein + (1|Wetland_type), data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 0.25), class=Intercept),
+                  prior(normal(-0.25, 0.25), class = b),
+                  prior(gamma(1,3), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+
+save(m1, file = "/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m1.rda")
+
+load("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m1.rda")
+```
+
+```{r m2}
+brms::get_prior(Liver_imi_desnitro_ng_g_dwt ~ Brain_imi_pg_mg_protein + Wetland_type, data = d, family = Gamma(link = "log"))
+
+d %>% 
+  group_by(Wetland_type) %>% 
+  summarise(mean = mean(Liver_imi_desnitro_ng_g_dwt))
+
+m2_prior <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 0.25), class=Intercept),
+                  prior(normal(1, 2), class = b),
+                  prior(gamma(6, 0.5), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE), sample_prior = "only")
+
+conditional_effects(m2_prior)
+
+m2 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 0.25), class=Intercept),
+                  prior(normal(1, 2), class = b),
+                  prior(gamma(6, 0.5), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+
+save(m2, file = "/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m2.rda")
+
+load("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m2.rda")
+
+print(m2)
+conditional_effects(m2)
+pp_check(m2, type = "boxplot", notch=FALSE)
+pp_check(m2, type="hist")
+
+pp_check(m2, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(m2, type = "dens_overlay", resp = "Intercept", ndraws=100)
+
+d %>%
+  tidybayes::add_predicted_draws(object = m2, ndraws = 250) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = d,
+            mapping = aes(x = Liver_imi_desnitro_ng_g_dwt, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('IMI des-nitro liver density ')),
+       title = 'IMI des-nitro liver, actual versus predicted') 
+```
+```{r m3}
+m3 <- brm(Liver_imi_desnitro_ng_g_dwt ~ Wetland_type, data = d, family = Gamma(link = "log"), 
+          prior=c(prior(normal(-2, 1), class=Intercept),
+                  prior(normal(1, 2), class = b),
+                  prior(gamma(6, 0.25), class="shape")),
+          iter = 2000 , warmup = 500, chains = 4, cores = 4,
+          seed = 5, save_pars = save_pars(all = TRUE))
+
+
+save(m3, file = "/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m3.rda")
+
+load("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/Liver_model_R_code/model_selection/m3.rda")
+
+print(m3)
+conditional_effects(m3)
+pp_check(m3, type = "boxplot", notch=FALSE)
+pp_check(m3, type="hist")
+
+pp_check(m3, type = "dens_overlay", resp = "Liver_imi_desnitro_ng_g_dwt", ndraws=100)
+pp_check(m3, type = "dens_overlay", resp = "Intercept", ndraws=100)
+
+pp_check(m3, type='stat', stat='mean')
+
+d %>%
+  tidybayes::add_predicted_draws(object = m3, ndraws = 250) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = d,
+            mapping = aes(x = Liver_imi_desnitro_ng_g_dwt, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('IMI des-nitro liver density ')),
+       title = 'IMI des-nitro liver, actual versus predicted') 
+```
+# m3 = final model
+
+
+
+```{r}
+loo_m0.5 <- loo(m0.5, save_psis = TRUE, cores = 1)
+print(loo_m0.5) # ok = 2, good = 8
+plot(loo_m0.5, label_points = TRUE) # point 8 and 10
+yrep <- brms::posterior_predict(m0.5)
+
+bayesplot::ppc_loo_pit_overlay(d$Liver_imi_desnitro_ng_g_dwt, 
+                    yrep = yrep, 
+                    lw = weights(loo_m0.5$psis_object))
+
+loo_m1 <- loo(m1, save_psis = TRUE, cores = 1)
+print(loo_m1) # ok = 2, good = 8
+plot(loo_m1, label_points = TRUE) # point 8 (ok) and 10 (ok)
+yrep <- brms::posterior_predict(m1)
+
+ppc_loo_pit_overlay(d$Liver_imi_desnitro_ng_g_dwt, 
+                    yrep = yrep, 
+                    lw = weights(loo_m1$psis_object))
+
+loo_m2 <- loo(m2, save_psis = TRUE, cores = 1)
+print(loo_m2) # ok = 1, good = 9
+plot(loo_m2, label_points = TRUE) # point 8 (ok)
+yrep <- posterior_predict(m2)
+
+ppc_loo_pit_overlay(d$Liver_imi_desnitro_ng_g_dwt, 
+                    yrep = yrep, 
+                    lw = weights(loo_m2$psis_object))
+
+loo_compare(loo_m0.5, loo_m1, loo_m2) # m0.5 > m1
+```
+     elpd_diff se_diff
+m0.5   0.0       0.0  
+m1    -0.1       0.1  
+m2   -20.5       2.3
+
+# extract posterior samples
+```{r}
+posts <- m3$data %>%  # uses the raw data contained in the model file
+  modelr::data_grid(Wetland_type) %>%  # from modelr. creates a grid of data points to predict over
+  tidybayes::add_epred_draws(m3)  # from bayesplot. for each point on the grid, samples a bunch of draws (i.e., iterations) of the outcome variable
+
+posts
+```
+
+# summarize and plot the posteriors
+```{r}
+p_liver <- posts %>%
+  ggplot() +
+  geom_boxplot(aes(x=Wetland_type, y=.epred), 
+            outlier.shape = NA, width = 0.1, 
+            position = position_dodge(0.9)) +
+  geom_jitter(data = m3$data, 
+              aes(x=Wetland_type, y = Liver_imi_desnitro_ng_g_dwt), 
+              shape=21, size=1.5, alpha=0.6, 
+              width=0.05, fill="grey52") +
+  theme_classic() +
+  labs(x = "Wetland Type",
+       y = "Desnitro-imidacloprid \nLiver Concentration (µg/g)",
+       color = "Concentration (µg/L)") +
+  theme(axis.text.x = element_text(color="black", size="10")) +
+  theme(axis.text.y = element_text(color="black", size="10")) +
+  theme(legend.title = element_text(face="bold", size="10"))
+
+p_liver
+
+#ggsave("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/New_figs/imi_trtp.tiff", p_liver, dpi=400, width=5, height=3, units="in")
+```
+```{r}
+summary <- posts %>%
+  group_by(Wetland_type) %>%
+  #tidybayes::median_qi(.epred, .width = 0.89) %>% 
+  tidybayes::mean_qi(.epred, .width = 0.89)
+
+post_sum <- posts %>% 
+  group_by(Wetland_type) %>% 
+  summarize(median = median(.epred),
+            mean = mean(.epred),
+            sd = sd(.epred),
+            low89 = quantile(.epred, probs = 0.055),
+            high89 = quantile(.epred, probs = 0.945))
+
+summary
+```
+  Wetland_type     .epred      .lower     .upper .width .point .interval
+1 Reference    0.00000114 0.000000903 0.00000155   0.89 median qi   
+2 Tile         1.97       1.57        2.51         0.89 median qi
+
+```{r}
+R <- posts %>% 
+  filter(Wetland_type == "Reference") %>% 
+  rename(R.epred = .epred)
+
+T <- posts %>% 
+  filter(Wetland_type == "Tile") %>% 
+  rename(T.epred = .epred)
+
+dd <- data.frame(R, T)
+
+diff <- (T$T.epred - R$R.epred)
+mean(diff) # 1.998381
+quantile(diff,probs=c(0.055,0.945))
+sum(diff>0)/6000 
+```
+    5.5%    94.5% 
+1.573491 2.511698 
+
+```{r}
+# add colors
+cp <- c("gray83", "grey55")
+
+plot_liver <- ggplot() +
+  geom_violin(data=posts, aes(x=Wetland_type, y=.epred, fill=Wetland_type), position = "dodge") +
+  geom_boxplot(data=posts, aes(x=Wetland_type, y=.epred, fill=Wetland_type), outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_jitter(data=d, aes(x=Wetland_type, y=Liver_imi_desnitro_ng_g_dwt), size=0.5, shape=1, width = 0.25) +
+  scale_y_log10() +
+  labs(x = "Wetland Type", 
+       y = "Desnitro-imidacloprid \nLiver Concentration \n(ng/g dwt)",
+       fill= "Wetland Type") +
+  theme(text= element_text(size=20), 
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.caption=element_text(size=10)) +
+  theme_classic() + 
+  scale_fill_manual(values=cp) + 
+  theme(plot.caption = element_text(hjust = 0)) +
+  theme(axis.text.x = element_text(color="black", size="10"))+
+  theme(axis.text.y = element_text(color="black", size="10"))+
+  theme(legend.title = element_text(face="bold", size="10"))
+plot_liver
+
+#ggsave("/Users/kaitlyncampbell/Documents/USD/Publications/IMI_field/New_figs/imi_liver_trt.tiff", plot_liver, dpi=400, width=5, height=3, units="in")
+```
+
