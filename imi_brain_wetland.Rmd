@@ -3,6 +3,7 @@ output: html_document
 editor_options: 
   chunk_output_type: console
 ---
+# load packages
 ```{r}
 library(brms)
 library(dplyr)
@@ -18,51 +19,43 @@ library(readr)
 library(tidybayes)
 library(bayesplot)
 ```
+
+# import data
 ```{r}
 my_data <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/my_data2.csv")
 my_data <- select(my_data, -X1)
 
+# change to factors
 my_data$Wetland_type <- as.factor(my_data$Wetland_type)
 my_data$Site <- as.factor(my_data$Site)
 
-# add locality for sites
-v <- my_data %>% 
-  filter(Site == "lost_lake" | Site == "volker") %>% 
-  mutate(locality = 'south')
-
-vv <- my_data %>% 
-  filter(Site == "acheson" | Site == "buffalo_lake") %>% 
-  mutate(locality = 'middle')
-
-vvv <- my_data %>% 
-  filter(Site == "pettigrew" | Site == "habeger") %>% 
-  mutate(locality = 'north')
-
-my_data <- rbind(v,vv,vvv)
-rm(v,vv,vvv)
-my_data$locality <- as.factor(my_data$locality)
-
+# filter for just one brain measurement so you don't have repeating individuals in the Animal_ID column
 bo <- my_data %>%
   filter(Measurement == '1_bulbus_olf_length')
 
+# import data with imidacloprid brain concentrations
 imi <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/imi.csv")
 
+# remove weird extra rows
 imi <- select(imi, -X1, -X1_1)
 
+# change to factors
 imi$Wetland_type <- as.factor(imi$Wetland_type)
 imi$Site <- as.factor(imi$Site)
 imi$Measurement <- as.factor(imi$Measurement)
 
+# re-arrange data
 imi <- imi %>% 
   gather(key = "Contaminant", value = "water_ug_L", -Measurement, -Average_length, -Wetland_type, -Site, -Brain_mass_g, -TL_cm, -STD_body_mass_length, -STD_brain_mass_length, -Body_mass_g, -IMI_brain_ng_g_tissue, -IMI_brain_ng_mg_protein, -Animal_ID)
 
+# once again, filter for just one brain measurement to prevent duplicates
 bo_imi <- imi %>%
     filter(Measurement == '1_bulbus_olf_length')
 
 # rename bo_imi to bol_imi_brain_water (b/c it has imi brain and water data included)
 bol_imi_brain_water <- bo_imi
 
-# remove columns named Contaminant, water_ug_L, and imi_brain
+# remove columns named Contaminant, water_ug_L
 bol_imi_brain <- bo_imi %>% 
   select (-c(Contaminant, water_ug_L))
 
@@ -70,27 +63,12 @@ bol_imi_brain <- bo_imi %>%
 bol_imi_brain <- bol_imi_brain[!duplicated(bol_imi_brain), ]
 
 # Add 0.000001 to imi brain values so it can be used in a gamma distribution (gamma models can't handle 0 values and one of the frogs had 0 ng/mg protein of imi in its brain)
-
 bol_imi_brain <- bol_imi_brain %>% 
   mutate(IMI_brain_ng_mg_protein = IMI_brain_ng_mg_protein + 0.000001)
 ```
 
+# m21 model, my poor soul ran 20 models before this one
 ```{r}
-bol_imi_brain %>% 
-  group_by(Wetland_type, Site) %>% 
-  summarize(mean = mean(IMI_brain_ng_mg_protein),
-            sd = sd(IMI_brain_ng_mg_protein))
-
-bol_imi_brain %>% 
-  group_by(Wetland_type) %>% 
-  summarize(mean_IMI = mean(IMI_brain_ng_mg_protein),
-            sd_IMI = sd(IMI_brain_ng_mg_protein))
-```
-
-
-# load m21 model
-```{r}
-# don't run
 m21 <- brm(IMI_brain_ng_mg_protein ~ Wetland_type + (1|Site), data = bol_imi_brain, family = Gamma(link = "log"), 
           prior=c(prior(normal(0, 1), class=Intercept),
                   prior(normal(1, 1), class = b),
@@ -99,8 +77,7 @@ m21 <- brm(IMI_brain_ng_mg_protein ~ Wetland_type + (1|Site), data = bol_imi_bra
           seed = 5, control = list(adapt_delta = 0.999), 
           save_pars = save_pars(all = TRUE))
 
-load("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/m21.rda")
-conditional_effects(m21)
+# model checks
 print(m21)
 plot(m21)
 
@@ -108,6 +85,7 @@ pp_check(m21, type = "dens_overlay", resp = "IMI_brain_ng_mg_protein", nsamples=
 pp_check(m21, type = "dens_overlay", resp = "Intercept", nsamples=100)
 pp_check(m21, type = "dens_overlay", resp = "Wetland_typetile", nsamples=100)
 
+# how well does this model predict?
 bol_imi_brain %>%
   tidybayes::add_predicted_draws(model = m21, n = 100) %>%
   ungroup() %>%
@@ -124,10 +102,12 @@ bol_imi_brain %>%
   labs(x = expression(paste('IMI brain density ')),
        title = 'IMI brain density, actual versus predicted')
 
-
+# check model performance
 loo_m21 <- loo(m21, save_psis = TRUE, cores = 2, moment_match = TRUE)
 print(loo_m21) # ok = 1 ; p_loo = 5.2 , se = 2.5
 yrep <- posterior_predict(m21)
+
+# we want a nice parabola shape
 ppc_loo_pit_overlay(bol_imi_brain$IMI_brain_ng_mg_protein, 
                     yrep = yrep, 
                     lw = weights(loo_m21$psis_object))
@@ -182,7 +162,7 @@ bol_imi_brain %>%
 ```
 # Slight overestimates at Volker (tile site), but the other estimates appear to be within an appropriate range given these data
 
-# Summary stats from posterior with 95% CI
+# Summary stats from posterior with 95% and 89% CI
 ```{r}
 mu_wetland_summary <- mu_wetland %>% 
   group_by(type) %>% 
@@ -222,20 +202,6 @@ mu_wetland_summary_89
 
 # make figure for model summaries
 ```{r}
-mu_wetland_summary_89 %>% 
-  ggplot(aes(x=type, y=median, ymin=low89, ymax=high89, fill=type)) + 
-  geom_point(size=4, position=position_dodge(width=0.4), shape=21)+ scale_y_log10() +
-  geom_errorbar(width=0.1, position=position_dodge(width=0.4)) +
-  xlab("Wetland Type")+
-  ylab("Imidacloprid \nBrain Concentration \n(pg/mg protein)")+
-  labs(caption = "Summary of imidacloprid brain concentrations in \nNorthern Leopard frogs by treatment. Results are averages \nand 95% credible intervals from the posterior distribution of \na Bayesian generalized linear mixed model. Y-axis is on the \nlog scale.",
-       fill= "Wetland Type")+
-  theme_classic()+
-  theme(axis.text.x = element_text(color="black", size="10"))+
-  theme(axis.text.y = element_text(color="black", size="10"))+
-  theme(legend.title = element_text(face="bold", size="10"))+
-  theme(plot.caption = element_text(hjust = 0))
-
 imi_wetlandp <- mu_wetland_summary %>% 
   ggplot(aes(x=type, y=mean, ymin=low95, ymax=high95, fill=type)) + 
   geom_point(size=4, position=position_dodge(width=0.4), shape=21)+ scale_y_log10() +
@@ -299,31 +265,3 @@ quantile(diff_ct$dif,probs=c(0.055,0.945)) # 89% CrI: (0.02058185 , 5.75204832)
 
 sum(diff_ct$dif>0)/6000 # 94.68%
 ```
-
-```{r}
-# Which livers will you send to UNL?
-
-View(imi)
-
-# find site with highest and lowest IMI brain concentrations (you can only afford 10 livers, but you sent 30 brain samples to UNL so you have to pick 10 out of the 30)
-imi %>% 
-  group_by(Site) %>% 
-  summarize(mean= mean(IMI_brain_ng_mg_protein))
-# habeger = 7.62 IMI ng/mg protein in brain tissue
-# buffalo lake = 1.10 IMI ng/mg protein in brain tissue
-
-bl <- imi %>% 
-  filter(Site == 'buffalo_lake')
-View(bl)
-
-# Send these livers :
-# Buffalo lake : KSC 08 , 10, 25, 28, 29 
-
-hb <- imi %>% 
-  filter(Site == 'habeger')
-View(hb)
-
-# Send these livers :
-# Habeger = KSC 11, 12, 13, 45, 48
-```
-
