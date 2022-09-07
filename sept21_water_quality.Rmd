@@ -1,0 +1,415 @@
+---
+title: "sep21_water_quality"
+author: "Kaitlyn Campbell"
+date: "9/2/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+Water quality models for IMI field study 2019 (completed 09/10/21)
+```{r load packages}
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(tibble)  
+library(tidyverse)
+library(devtools)
+library(rstan)
+library(rstantools)
+library(tidybayes)
+library(bayesplot)
+```
+```{r import and wrangle data}
+# water data
+#d <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/water.csv")
+
+d <- read_csv("/Users/kaitlyncampbell/Documents/Chapter4_Brains_IMI/Field/water.csv")
+
+d <- d %>% 
+  select(-Lab_ID_String, -`%Dimoxystrobin`, -`%Metominostrobin`, -`%Nitenpyram`, -`%Terbutylazine`, -Project, -Trifloxystrobin, -Thiacloprid, -Pyraclostrobin, -Picoxystrobin, -Acetamiprid, -Dimethoate, -Dinotefuran)
+
+dd <- d %>% 
+  gather(key = "Contaminant", value = "Water_ug_L", -Sample_ID, -Site, -Wetland_type, -Collection_Date, -Batch, -`Analysis Date`)
+
+dd <- dd %>% 
+  mutate(Water_ug_L = (Water_ug_L+0.000001))
+
+dd$Wetland_type <- as.factor(dd$Wetland_type)
+dd$Contaminant <- as.factor(dd$Contaminant)
+```
+```{r water_m13 model}
+water_m13 <- brm(Water_ug_L ~ Wetland_type * Contaminant, data = dd, family = Gamma(link = "log"), 
+       prior=c(prior(normal(-4.4, 1), class=Intercept),
+                   prior(normal(0, 1), class=b, coef="Wetland_typetile"),
+                   prior(normal(-1, 1), class = b),
+                   prior(normal(1, 1), class=b, coef="Wetland_typetile:ContaminantClothianidin"),
+                   prior(normal(1, 1), class=b, coef="Wetland_typetile:ContaminantImidacloprid"),
+                   prior(normal(1, 1), class=b, coef="Wetland_typetile:ContaminantMetalaxyl"),
+                   prior(normal(1, 1), class=b, coef="Wetland_typetile:ContaminantThiamethoxam"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+water_m13.1 <- brm(Water_ug_L ~ Wetland_type * Contaminant, data = dd, family = Gamma(link = "log"), 
+       prior=c(prior(normal(-4.4, 1), class=Intercept),
+                   prior(normal(-1, 0.5), class = b),
+                   prior(exponential(200), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+pp_check(water_m13.1, nsample=100)
+loo_13.1 <- loo(water_m13.1, save_psis = TRUE, cores = 2, moment_match = TRUE)
+print(loo_13.1) # ok = 2; p_loo = 4.6 ; se_loo = 1.0
+yrep <- posterior_predict(water_m13.1)
+ppc_loo_pit_overlay(dd$Water_ug_L, 
+                    yrep = yrep, 
+                    lw = weights(loo_13.1$psis_object))
+
+dd %>%
+  tidybayes::add_predicted_draws(model = water_m13.1, n = 100) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = dd,
+            mapping = aes(x = Water_ug_L, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('Water quality density ')),
+       title = 'water_m1; Water quality density, actual versus predicted')
+
+ppc_intervals(dd$Water_ug_L, yrep = yrep) # underestimating 2 values - highest concentrations
+ppc_stat(dd_neonic$Water_ug_L_1000, yrep = yrep, stat = "mean") # underestimates slightly
+
+#save(water_m13, file="/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/imi_water_models/water_m13.rda")
+
+#load("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/imi_water_models/water_m13.rda")
+
+load("/Users/kaitlyncampbell/Documents/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/imi_water_models/water_m13.rda")
+
+print(water_m13, prior=T)
+plot(water_m13)
+conditional_effects(water_m13)        
+pp_check(water_m13)
+
+print(water_m13, prior=TRUE)
+plot(water_m13)
+pp_check(water_m13, type = "boxplot", notch=FALSE) # some values go up to 7.5
+pp_check(water_m13, type="hist")
+pp_check(water_m13, nsamples=50)
+conditional_effects(water_m13)  # Back-transformed parameter estimates
+conditional_effects(water_m13, method='predict')  # Same, but for responses
+
+pp_check(water_m12, type = "dens_overlay", resp = "Water_ug_L")+xlim(0,1)
+pp_check(water_m12, type = "dens_overlay", resp = "Intercept", nsamples=100)+xlim(0,0.5)
+pp_check(water_m12, type = "dens_overlay", resp = "Wetland_typetile", nsamples=100)+xlim(0,0.5)
+
+dd %>%
+  tidybayes::add_predicted_draws(model = water_m13, ndraws = 100) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = dd,
+            mapping = aes(x = Water_ug_L, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('Water quality density ')),
+       title = 'water_m13; Water quality density, actual versus predicted')
+
+loo_water_m13 <- loo(water_m13, save_psis = TRUE, cores = 2, moment_match = TRUE)
+print(loo_water_m13) # p_loo = 1.3 ; se_loo = 0.2
+yrep <- posterior_predict(water_m13)
+ppc_loo_pit_overlay(dd$Water_ug_L, 
+                    yrep = yrep, 
+                    lw = weights(loo_water_m13$psis_object))
+
+ppc_intervals(dd$Water_ug_L, yrep = yrep)
+ppc_stat(dd$Water_ug_L, yrep = yrep, stat = "mean")
+ppc_stat(dd$Water_ug_L, yrep = yrep, stat = "sd")
+ppc_stat_grouped(dd$Water_ug_L, group=dd$Wetland_type, yrep = yrep, stat = "mean")
+ppc_stat_grouped(dd$Water_ug_L, group=dd$Wetland_type, yrep = yrep, stat = "sd")
+ppc_stat_grouped(dd$Water_ug_L, group=dd$Contaminant, yrep = yrep, stat = "mean")
+ppc_stat_grouped(dd$Water_ug_L, group=dd$Contaminant, yrep = yrep, stat = "sd") 
+```
+```{r extract posterior}
+post_water <- posterior_samples(water_m13)
+nrow(post_water) # 6000
+head(post_water)
+
+as_tibble(post_water) %>% 
+  mutate(iteration = 1:nrow(post_water))
+
+# Reference / Azoxystrobin
+fit_ref_azo <- data.frame(value = exp(post_water$b_Intercept), type = "Reference", contaminant = "Azoxystrobin", iter = 1:nrow(post_water)) 
+
+# Reference / Clothianidin
+fit_ref_clo <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantClothianidin), type = "Reference", contaminant = "Clothianidin", iter = 1:nrow(post_water)) 
+
+# Reference / Imidacloprid
+fit_ref_imi <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantImidacloprid), type = "Reference", contaminant = "Imidacloprid", iter = 1:nrow(post_water))
+
+# Reference / Thiamethoxam
+fit_ref_txm <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantThiamethoxam), type = "Reference", contaminant = "Thiamethoxam", iter = 1:nrow(post_water))
+
+# Reference / Metalaxyl 
+fit_ref_meta <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantMetalaxyl), type = "Reference", contaminant = "Metalaxyl", iter = 1:nrow(post_water))
+
+# Tile / Azoxystrobin
+fit_tile_azo <- data.frame(value = exp(post_water$b_Intercept + post_water$b_Wetland_typetile), type = "Tile", contaminant = "Azoxystrobin", iter = 1:nrow(post_water)) 
+
+# Tile / Clothianidin
+fit_tile_clo <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantClothianidin + post_water$b_Wetland_typetile + post_water$`b_Wetland_typetile:ContaminantClothianidin`), type = "Tile", contaminant = "Clothianidin", iter = 1:nrow(post_water)) 
+
+# Tile / Imidacloprid
+fit_tile_imi <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantImidacloprid + post_water$b_Wetland_typetile + post_water$`b_Wetland_typetile:ContaminantImidacloprid`), type = "Tile", contaminant = "Imidacloprid", iter = 1:nrow(post_water))
+
+# Tile / Thiamethoxam
+fit_tile_txm <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantThiamethoxam + post_water$b_Wetland_typetile + post_water$`b_Wetland_typetile:ContaminantThiamethoxam`), type = "Tile", contaminant = "Thiamethoxam", iter = 1:nrow(post_water))
+
+# Tile / Metalaxyl 
+fit_tile_meta <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantMetalaxyl + post_water$b_Wetland_typetile + post_water$`b_Wetland_typetile:ContaminantMetalaxyl`), type = "Tile", contaminant = "Metalaxyl", iter = 1:nrow(post_water))
+
+mu_ref <- rbind(fit_ref_azo, fit_ref_clo, fit_ref_imi, fit_ref_txm, fit_ref_meta)
+mu_tile <- rbind(fit_tile_azo, fit_tile_clo, fit_tile_imi, fit_tile_txm, fit_tile_meta)
+mu_water <- rbind(mu_ref, mu_tile)
+```
+
+# create summary output
+```{r}
+summary_water <- mu_water %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median = median(value),
+            sd = sd(value),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945)) %>%
+  mutate_if(is.numeric,round,3)
+summary_water
+```
+  type       mean median    sd low89 high89
+1 Reference 0.006  0.004 0.007 0.001  0.018
+2 Tile      0.028  0.019 0.04  0.002  0.077
+
+   type      contaminant   mean median    sd low89 high89
+ 1 Reference Azoxystrobin 0.013  0.011 0.007 0.006  0.026
+ 2 Reference Clothianidin 0.005  0.003 0.006 0.001  0.013
+ 3 Reference Imidacloprid 0.006  0.004 0.005 0.002  0.015
+ 4 Reference Thiamethoxam 0.004  0.003 0.005 0.001  0.012
+ 5 Reference Metalaxyl    0.002  0.001 0.002 0      0.005
+ 
+ 6 Tile      Azoxystrobin 0.027  0.022 0.019 0.009  0.058
+ 7 Tile      Clothianidin 0.04   0.027 0.046 0.01   0.1  
+ 8 Tile      Imidacloprid 0.032  0.019 0.045 0.006  0.094
+ 9 Tile      Thiamethoxam 0.035  0.024 0.052 0.009  0.088
+10 Tile      Metalaxyl    0.007  0.004 0.013 0.001  0.022
+
+# cumulative neonic levels
+```{r}
+# ref
+0.005 + 0.006 + 0.004 # = 0.015 µg/L
+
+# tile
+0.04 + 0.032 + 0.035 # = 0.107
+
+0.107/0.015 # = 7.13
+```
+
+
+# plot
+```{r prep for plot}
+# new color palette
+colorpalette <- c("#8d96a3","#66a182","#edae49","#6699CC","#d1495b")
+
+# rename levels in dataset 'dd'
+dd$type2<-ifelse(dd$Wetland_type=="control", "Reference", "Tile")
+dd$type2 <- as.factor(dd$type2)
+
+# reorder
+mu_water$contaminant <- factor(mu_water$contaminant, levels = c("Azoxystrobin","Clothianidin", "Imidacloprid", "Thiamethoxam", "Metalaxyl"))
+
+dd$Contaminant <- factor(dd$Contaminant, levels = c("Azoxystrobin","Clothianidin", "Imidacloprid", "Thiamethoxam", "Metalaxyl"))
+```
+
+# figure option 0.5:
+```{r}
+# select only neocnics from mu_water
+mu_water_neonic <- mu_water %>% 
+  filter(contaminant == "Clothianidin" | contaminant == "Imidacloprid" | contaminant == "Thiamethoxam") 
+#View(mu_water_neonic)
+
+dd_neonic <- dd %>% 
+  filter(Contaminant == "Clothianidin" | Contaminant == "Imidacloprid" | Contaminant == "Thiamethoxam") 
+#View(dd_neonic)
+
+
+
+water_plot_neonic <- ggplot() + 
+  geom_violin(data= mu_water_neonic, aes(x = type, y = value, fill = contaminant), position = "dodge") +
+  geom_boxplot(data= mu_water_neonic, aes(x= type, y= value, fill= contaminant),
+    outlier.shape = NA, 
+    width = 0.1, 
+    position = position_dodge(0.9)) +
+  geom_jitter(data=dd_neonic, mapping=aes(x=type2, y=Water_ug_L, fill= Contaminant), 
+             shape=21, 
+             alpha=0.6,
+             size=1.3,
+             position = position_jitterdodge(dodge.width=0.95)) +
+  scale_y_log10(labels = scales::comma) +
+  labs(x = "Wetland Type", 
+       y = "Aqueous Concentration (µg/L)",
+       fill= "Contaminant") +
+  theme(text= element_text(size=20), 
+        plot.title = element_text(face = "bold", hjust = 0.5), 
+        plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  theme(plot.caption = element_text(hjust = 0),
+        legend.position = "bottom") +
+  scale_fill_brewer(palette = "BrBG") +
+  geom_hline(yintercept = 0.01, color="black", linetype = 'dashed') +
+  geom_hline(yintercept = 0.05, color="#BF812D", linetype = 'dashed')
+water_plot_neonic
+
+RColorBrewer::display.brewer.pal(11, "BrBG")
+RColorBrewer::brewer.pal(11, "BrBG")
+
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot_neonic_dashed.tiff", water_plot_neonic, dpi=400, width=5, height=3, units="in")
+```
+
+
+# figure option 1:
+```{r}
+water_plot1 <- ggplot() + 
+  geom_violin(data= mu_water, aes(x = type, y = value, fill = contaminant), position = "dodge") +
+  geom_boxplot(data= mu_water, aes(x= type, y= value, fill= contaminant),
+    outlier.shape = NA, 
+    width = 0.1, 
+    position = position_dodge(0.9)) +
+  geom_jitter(data=dd, mapping=aes(x=type2, y=Water_ug_L, fill= Contaminant), 
+             shape=21, 
+             alpha=0.6,
+             size=1.3,
+             position = position_jitterdodge(dodge.width=0.9)) +
+  scale_y_log10(labels = scales::comma) +
+  labs(x = "Wetland Type", 
+       y = "Pesticide Concentration (µg/L)",
+       fill= "Contaminant") +
+  theme(text= element_text(size=20), 
+        plot.title = element_text(face = "bold", hjust = 0.5), 
+        plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  theme(plot.caption = element_text(hjust = 0)) +
+  scale_fill_manual(values=colorpalette)
+water_plot1
+
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot1.tiff", water_plot1, dpi=400, width=5, height=3, units="in")
+```
+
+# figure option 2:
+```{r}
+water_plot2 <- mu_water %>% 
+ggplot(aes(x = type, y = value, fill=contaminant)) + 
+  ggdist::stat_halfeye(adjust = .5, width = .6, .width = 0, justification = -.4, 
+    point_colour = NA, alpha=0.4) + 
+  geom_boxplot(width = .4, outlier.shape = NA) +
+  geom_jitter(data=dd, aes(x=type2, y=Water_ug_L, fill= Contaminant), 
+              shape=21, 
+              size = 1.3, 
+              alpha = .6, 
+              position = position_jitterdodge(dodge.width=0.4)) + 
+  coord_cartesian(xlim = c(1.2, NA), clip = "off") +
+  scale_fill_manual(values=colorpalette) + 
+  scale_y_log10(labels = scales::comma) +
+  labs(x = "Wetland Type", 
+       y = "Pesticide Concentration (µg/L)",
+       fill= "Contaminant") +
+  theme_classic()
+water_plot2
+
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot2.tiff", water_plot2, dpi=400, width=5, height=3, units="in")
+```
+
+# figure option 3:
+```{r}
+mu_water_imi <- mu_water %>% 
+  filter(contaminant=="Imidacloprid")
+
+dd_imi <- dd %>% 
+  filter(Contaminant=="Imidacloprid")
+
+cp <- c("gray83")
+
+water_plot_imi <- ggplot() + 
+  geom_violin(data= mu_water_imi, aes(x = type, y = value, fill = contaminant), position = "dodge") +
+  geom_boxplot(data= mu_water_imi, aes(x= type, y= value, fill= contaminant),
+    outlier.shape = NA, 
+    width = 0.1, 
+    position = position_dodge(0.9)) +
+  geom_jitter(data=dd_imi, mapping=aes(x=type2, y=Water_ug_L, fill= Contaminant), 
+             shape=21, 
+             alpha=0.6,
+             size=1.3,
+             position = position_jitterdodge(dodge.width=0.9)) +
+  scale_y_log10(labels = scales::comma) +
+  labs(x = "Wetland Type", 
+       y = "Imidacloprid Concentration (µg/L)") +
+  theme(text= element_text(size=20), 
+        plot.title = element_text(face = "bold", hjust = 0.5), 
+        plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  theme(plot.caption = element_text(hjust = 0)) +
+    scale_fill_manual(values=cp) +
+  theme(legend.position = "none")
+water_plot_imi
+
+#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot_imi.tiff", water_plot_imi, dpi=400, width=5, height=3, units="in")
+```
+
+
+# compare differences
+```{r}
+# Ref vs Tile
+dif = (mu_tile$value) - (mu_ref$value)
+mean(dif) # 0.02222671
+quantile(dif,probs=c(0.055,0.945)) # (-0.0002050666 , 0.0690971688)
+sum(dif>0)/30000 # 0.9394667
+
+# Azo at ref and tile
+dif_azo <- fit_tile_azo$value - fit_ref_azo$value
+mean(dif_azo) # 0.01361929
+quantile(dif_azo,probs=c(0.055,0.945)) # (-0.005402433 , 0.043944714)
+sum(dif_azo>0)/6000 # 0.8558333
+
+# Clo at ref and tile
+dif_clo <- fit_tile_clo$value - fit_ref_clo$value
+mean(dif_clo) # 0.03494967
+quantile(dif_clo,probs=c(0.055,0.945)) # (0.006715258 , 0.093226635)
+sum(dif_clo>0)/6000 # 0.9936667
+
+# Txm at ref and tile
+dif_txm <- fit_tile_txm$value - fit_ref_txm$value
+mean(dif_txm) # 0.03089875
+quantile(dif_txm,probs=c(0.055,0.945)) # (0.005470291 , 0.082346162)
+sum(dif_txm>0)/6000 # 0.9923333
+
+# Imi at ref and tile
+dif_imi <- fit_tile_imi$value - fit_ref_imi$value
+mean(dif_imi) # 0.02639857
+quantile(dif_imi,probs=c(0.055,0.945)) # (0.0004985235 , 0.0837729073)
+sum(dif_imi>0)/6000 # 0.953
+
+# Meta at ref and tile
+dif_meta <- fit_tile_meta$value - fit_ref_meta$value
+mean(dif_meta) # 0.005267288
+quantile(dif_meta,probs=c(0.055,0.945)) # (-0.0005958763 , 0.0189422332)
+sum(dif_meta>0)/6000 # 0.9025
+```
+
