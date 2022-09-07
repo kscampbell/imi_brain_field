@@ -1,0 +1,214 @@
+---
+title: "Untitled"
+author: "Kaitlyn Campbell"
+date: "5/26/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# load packages
+```{r}
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(tibble)  
+library(tidyverse)
+library(devtools)
+library(rstan)
+library(rstantools)
+library(tidybayes)
+library(bayesplot)
+```
+
+# import and wrangle data
+```{r}
+my_data <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/my_data2.csv")
+
+# remove weird extra row named 'X1'
+my_data <- select(my_data, -X1)
+
+# make Wetland_type, Site, and Measurement a factor
+my_data$Wetland_type <- as.factor(my_data$Wetland_type)
+my_data$Site <- as.factor(my_data$Site)
+my_data$Measurement <- as.factor(my_data$Measurement)
+
+# make a new dataset called 'bo' - it only contains bulbus olfactory length measurements
+bo <- my_data %>%
+  filter(Measurement == '1_bulbus_olf_length')
+
+# multiply all Average_length values by 10 because they are so small and hard to set priors for
+bo <- bo %>% 
+  mutate(Average_length10 = Average_length*10)
+
+bo <- bo %>% 
+  mutate(Average_length100 = Average_length*100)
+
+imi <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/imi.csv")
+
+imi$Wetland_type <- as.factor(imi$Wetland_type)
+imi$Site <- as.factor(imi$Site)
+imi$Measurement <- as.factor(imi$Measurement)
+
+imi <- imi %>% 
+  gather(key = "Contaminant", value = "water_ug_L", -Measurement, -Average_length, -Wetland_type, -Site, -Brain_mass_g, -TL_cm, -STD_body_mass_length, -STD_brain_mass_length, -Body_mass_g, -IMI_brain_ng_g_tissue, -IMI_brain_ng_mg_protein, -Animal_ID)
+
+bo_imi <- imi %>%
+    filter(Measurement == '1_bulbus_olf_length')
+
+bo_imi_w <- bo_imi %>% 
+     filter(Contaminant == 'imidacloprid_water')
+
+d <- imi %>% 
+  filter(Contaminant == 'imidacloprid_water') %>% 
+  filter(Measurement == "1_bulbus_olf_length") %>%
+  mutate(IMI_brain_ng_mg_protein = IMI_brain_ng_mg_protein + 0.000001) %>% 
+  mutate(water_ug_L = water_ug_L + 0.000001)
+
+water_imi_brain <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/water_imi_brain.csv")
+
+water_imi_brain <- water_imi_brain %>% 
+  mutate(IMI_brain_ng_mg_protein = IMI_brain_ng_mg_protein + 0.000001) %>% 
+  mutate(imidacloprid_water = imidacloprid_water + 0.000001)
+```
+
+```{r wb9 model}
+wb9 <- brm(IMI_brain_ng_mg_protein ~ imidacloprid_water + (1|rep), data = water_imi_brain, family = Gamma(link = "log"), 
+           prior=c(prior(normal(0.5, 2), class=Intercept),
+                   prior(normal(1, 2), class = b),
+                   prior(exponential(4), class="shape")),
+           iter = 2500 , warmup = 800, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+save(wb9, file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/imi_water_x_imi_brain_models/wb9.rda")
+conditional_effects(wb9)
+print(wb9)
+pp_check(wb9, type = "boxplot", notch=FALSE)
+pp_check(wb9, type="hist")
+```
+
+```{r}
+post <- posterior_samples(wb9) # extract posterior
+head(post)
+nrow(post) # 6800
+post_slope <- exp(post$b_imidacloprid_water) # slope of the model
+sum(post_slope>0)/6800 # Probability that slope is greater than zero. Probability = >0.99 (or >99.99% probability)
+quantile(post_slope, probs=c(0.025,0.5,0.975)) # 95% CrI = (0.1644074, 340.9286140) ; median = 7.8262900
+```
+       2.5%         50%       97.5% 
+  0.1644074   7.8262900 340.9286140 
+
+# plot
+```{r}
+wb9_plot<-conditional_effects(wb9, robust=FALSE)
+wb9_plot<-as.data.frame(wb9_plot$imidacloprid_water)
+```
+```{r}
+ggplot() +
+  geom_line(data=wb9_plot, aes(x=imidacloprid_water, y=estimate__)) +
+  geom_ribbon(data=wb9_plot, aes(x=imidacloprid_water, ymin=lower__, ymax=upper__), alpha=0.2) + geom_point(data=water_imi_brain, aes(x=imidacloprid_water, y=IMI_brain_ng_mg_protein, fill=Wetland_type), shape=21, alpha=0.6) + 
+  labs(y="Imidacloprid Brain Concentration (ng/mg protein)", x= "Aqueous Imidacloprid Concentration (µg/L)") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black", size="10")) +
+  theme(axis.text.y = element_text(color="black", size="10")) +
+  theme(legend.title = element_text(face="bold", size="10"))
+```
+
+
+
+
+```{r}
+post_wb9 <- posterior_samples(wb9) # extract posterior
+head(post_wb9)
+nrow(post_wb9) # 6800
+post_c <- exp(post_wb9$b_imidacloprid_water) # slope of the model
+
+
+sum(post_slope>0)/6800 # Probability that slope is greater than zero. Probability = >0.99 (or >99.99% probability)
+quantile(post_slope, probs=c(0.025,0.5,0.975)) # 95% CrI = (0.1644074, 340.9286140) ; median = 7.8262900
+```
+```{r}
+ggplot() +
+  geom_line(data=wb9_plot, aes(x=imidacloprid_water, y=estimate__, color=effect2__)) +
+  geom_ribbon(data=wb9_plot, aes(x=imidacloprid_water, ymin=lower__, ymax=upper__, fill=effect2__), alpha=0.2) + geom_point(data=water_imi_brain, aes(x=imidacloprid_water, y=IMI_brain_ng_mg_protein, fill=Wetland_type), shape=21, alpha=0.6) + 
+  labs(y="Imidacloprid Brain Concentration (ng/mg protein)", x= "Aqueous Imidacloprid Concentration (µg/L)") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black", size="10")) +
+  theme(axis.text.y = element_text(color="black", size="10")) +
+  theme(legend.title = element_text(face="bold", size="10"))
+```
+
+```{r}
+wb12$formula
+# IMI_brain_ng_mg_protein ~ imidacloprid_water * Wetland_type 
+
+# includes interaction
+plot(conditional_effects(wb12,
+                      effects = "imidacloprid_water:Wetland_type", 
+                      spaghetti = T, nsamples = 150), points = T,
+     point_args = c(alpha = 2/3, size = 1), mean = F)
+```
+
+
+```{r}
+post_wb15 <- posterior_samples(wb15) # extract posterior
+head(post_wb15)
+nrow(post_wb15) # 6800
+post <- exp(post_wb15$b_imidacloprid_water_100) # slope of the model
+
+
+sum(post>0)/6800 # Probability that slope is greater than zero. Probability = >0.99 (or >99.99% probability)
+quantile(post, probs=c(0.025,0.5,0.975)) # 95% CrI = (0.1644074, 340.9286140) ; median = 7.8262900
+
+as_tibble(post_wb15) %>% 
+  mutate(iteration = 1:nrow(post_wb15))
+
+
+control_wetland <- data.frame(value = exp(post_wb15$b_Intercept + post_wb15$b_imidacloprid_water_100), type = "control", iter = 1:nrow(post_wb15))
+tile_wetland <- data.frame(value = exp(post_wb15$b_Intercept + post_wb15$b_imidacloprid_water_100 + post_wb15$b_Wetland_typetile + post_wb15$`b_imidacloprid_water_100:Wetland_typetile`), type = "tile", iter = 1:nrow(post_wb15))
+mu_wetland <- rbind(control_wetland, tile_wetland)
+View(mu_wetland)
+
+mu_wetland %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median = median(value),
+            sd = sd(value),
+            low95 = quantile(value, probs = 0.025),
+            high95 = quantile(value, probs = 0.975)) %>%
+  mutate_if(is.numeric,round,2)
+
+ggplot() +
+  geom_line(data=mu_wetland, aes(x=imidacloprid_water, y=estimate__, color=effect1__)) +
+  geom_ribbon(data=wb12_plot, aes(x=imidacloprid_water, ymin=lower__, ymax=upper__, fill=effect1__), alpha=0.2) + geom_point(data=water_imi_brain, aes(x=imidacloprid_water, y=IMI_brain_ng_mg_protein, fill=Wetland_type), shape=21, alpha=0.6) + 
+  labs(y="Imidacloprid Brain Concentration (ng/mg protein)", x= "Aqueous Imidacloprid Concentration (µg/L)") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black", size="10")) +
+  theme(axis.text.y = element_text(color="black", size="10")) +
+  theme(legend.title = element_text(face="bold", size="10"))
+```
+
+# read .csv for total protein in field brains (mg digested in 1 mL)
+```{r}
+protein_d <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/field_brains_protein.csv")
+
+imi_conc <- imi %>% 
+  select(IMI_brain_ng_g_tissue, IMI_brain_ng_mg_protein, Animal_ID)
+
+imi_protein_d <- merge(imi_conc, protein_d, )
+```
+
+# plot raw data
+```{r}
+ggplot(imi_protein_d, aes(x=IMI_brain_ng_g_tissue, y=log(total_protein_mg))) + geom_point(aes(color=Wetland_type)) + geom_smooth(method="lm")
+
+ggplot(imi_protein_d, aes(x=log(IMI_brain_ng_g_tissue), y=total_protein_mg)) + geom_point(aes(color=Wetland_type)) + geom_smooth(method="lm")
+
+ggplot(imi_protein_d, aes(x=log(IMI_brain_ng_g_tissue), y=log(total_protein_mg))) + geom_point(aes(color=Wetland_type)) + geom_smooth(method="lm")
+
+ggplot(imi_protein_d, aes(x=Wetland_type, y=total_protein_mg)) + geom_boxplot()
+ggplot(imi_protein_d, aes(x=Wetland_type, y=IMI_brain_ng_g_tissue)) + geom_boxplot()
+ggplot(imi_protein_d, aes(x=Wetland_type, y=IMI_brain_ng_mg_protein)) + geom_boxplot()
+
+```
+
