@@ -36,6 +36,7 @@ bo <- my_data %>%
 ```
 
 ```{r}
+# check levels
 levels(my_data$Site)
 levels(my_data$Wetland_type)
 
@@ -43,6 +44,7 @@ levels(my_data$Wetland_type)
 levels(my_data$Site) <- c("Acheson","Buffalo Lake","Habeger", "Lost Lake", "Pettigrew", "Volker")
 levels(my_data$Wetland_type) <- c("Control","Tile")
 
+# filter for one brain measurement to prevent duplicates for each individual in the dataset
 bo <- my_data %>% 
   filter(Measurement == "1_bulbus_olf_length")
 
@@ -50,9 +52,8 @@ bo <- bo %>%
   rename(type = "Wetland_type")
 ```
 
+# model to determine if body mass differed between reference and tile wetland sites in 2019
 ```{r mass model}
-load(file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/m_mass1.1.rda")
-
 m_mass1.1 <- brm(Body_mass_g ~ Wetland_type, data = bo, family = Gamma(link = "log"), 
           prior=c(prior(normal(2.5, 2), class=Intercept),
                   prior(normal(0, 2), class = b),
@@ -61,7 +62,6 @@ m_mass1.1 <- brm(Body_mass_g ~ Wetland_type, data = bo, family = Gamma(link = "l
           seed = 5, control = list(adapt_delta = 0.999), 
           save_pars = save_pars(all = TRUE))
 ```
-
 
 # Extract posteriors
 ```{r}
@@ -86,6 +86,7 @@ mu_mass <- rbind(mu_ref_mass, mu_tile_mass)
 ```
 
 # summarize
+# 89% and 95% CI
 ```{r}
 summary <- mu_mass %>% 
   group_by(type) %>% 
@@ -101,11 +102,12 @@ summary
 
 view(summary)
 ```
+## output:
   type       mean median    sd low89 high89 low95 high95
 1 Reference  14.4   14.3  1.35  12.4   16.7  12.0   17.4
 2 Tile       15.8   15.8  1.51  13.6   18.4  13.2   19.1
 
-# differences?
+# differences between tile and reference sites?
 ```{r}
 diff_ct <- mu_tile_mass$value - mu_ref_mass$value
 mean(diff_ct) # 1.430934 g
@@ -113,26 +115,12 @@ quantile(diff_ct,probs=c(0.025,0.975)) # (-2.522099, 5.400463)
 quantile(diff_ct,probs=c(0.055,0.945)) # (-1.633938, 4.653148)
 sum(diff_ct>0)/6000 # 0.7686667
 ```
+# Less than a 77% probability that there is a difference
 
 # make plot
 ```{r}
 bo$type2<-ifelse(bo$Wetland_type=="control", "Reference", "Tile")
 bo$type2 <- as.factor(bo$type2)
-
-mu_mass %>%
-  ggplot(aes(x = type, y = value, fill = type)) +
-  geom_violin(position = "dodge") +
-  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
-  geom_point(data = bo, aes(x=type2, y=Body_mass_g, fill= type2), position = position_jitterdodge(seed = 1, dodge.width =0.9)) +
-  labs(x = "Wetland Type", 
-       y = "Body Mass (g)",
-       fill= "Wetland Type") +
-  theme(text= element_text(size=20), plot.title = element_text(face = "bold"), plot.caption = element_text(size=10)) +
-  theme_classic() + theme(plot.caption = element_text(hjust = 0, size=8)) +
-  theme(axis.text.x = element_text(color="black", size="10"))+
-  theme(axis.text.y = element_text(color="black", size="10"))+
-  theme(legend.title = element_text(face="bold", size="10"))
-
 
 # use light and dark grey to represent control vs tile
 cp <- c("gray83", "grey55")
@@ -157,11 +145,8 @@ mass_p
 ```
 
 
-##### TL ##### 
+##### TL (total body length) ##### 
 ```{r m_tl5_mm model}
-load(file = "/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/m_tl5_mm.rda")
-
-
 m_tl5_mm <- brm(TL_mm ~ Wetland_type + (1|Animal_ID), data = bo, family = Gamma(link = "log"), 
           prior=c(prior(normal(3, 3), class=Intercept),
                   prior(normal(0, 3), class = b),
@@ -192,6 +177,8 @@ mu_tl_tile <- data.frame(value = exp(post_2$b_Intercept + post_2$b_Wetland_typet
 
 mu_tl <- rbind(mu_tl_ref, mu_tl_tile)
 ```
+
+# get summaries
 ```{r}
 mu_tl_summary <- mu_tl %>% 
   group_by(type) %>% 
@@ -206,6 +193,7 @@ mu_tl_summary <- mu_tl %>%
 
 mu_tl_summary
 ```
+## output:
   type       mean median    sd low95 high95 low89 high89
 1 Reference  57.7   57.7  2.05  53.8   61.9  54.5   61.1
 2 Tile       60.8   60.7  2.06  56.8   64.9  57.5   64.2
@@ -218,6 +206,7 @@ quantile(diff_ct_tl,probs=c(0.025,0.975)) # (-2.490823, 8.602962)
 quantile(diff_ct_tl,probs=c(0.055,0.945)) # (-1.542854, 7.578885)
 sum(diff_ct_tl>0)/9200 # 0.8569565
 ```
+
 # Make plot
 ```{r}
 # use light and dark grey to represent control vs tile
