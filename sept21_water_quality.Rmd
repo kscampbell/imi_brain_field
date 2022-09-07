@@ -21,8 +21,6 @@ library(bayesplot)
 ```
 ```{r import and wrangle data}
 # water data
-#d <- read_csv("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/water.csv")
-
 d <- read_csv("/Users/kaitlyncampbell/Documents/Chapter4_Brains_IMI/Field/water.csv")
 
 d <- d %>% 
@@ -31,12 +29,14 @@ d <- d %>%
 dd <- d %>% 
   gather(key = "Contaminant", value = "Water_ug_L", -Sample_ID, -Site, -Wetland_type, -Collection_Date, -Batch, -`Analysis Date`)
 
+# add 0.000001 so you can use a gamma distribution (gamma distributions dont allow zeros)
 dd <- dd %>% 
   mutate(Water_ug_L = (Water_ug_L+0.000001))
 
 dd$Wetland_type <- as.factor(dd$Wetland_type)
 dd$Contaminant <- as.factor(dd$Contaminant)
 ```
+
 ```{r water_m13 model}
 water_m13 <- brm(Water_ug_L ~ Wetland_type * Contaminant, data = dd, family = Gamma(link = "log"), 
        prior=c(prior(normal(-4.4, 1), class=Intercept),
