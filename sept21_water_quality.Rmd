@@ -241,7 +241,7 @@ dd$Contaminant <- factor(dd$Contaminant, levels = c("Azoxystrobin","Clothianidin
 
 # figure option 0.5:
 ```{r}
-# select only neocnics from mu_water
+# select only neonics from mu_water
 mu_water_neonic <- mu_water %>% 
   filter(contaminant == "Clothianidin" | contaminant == "Imidacloprid" | contaminant == "Thiamethoxam") 
 #View(mu_water_neonic)
