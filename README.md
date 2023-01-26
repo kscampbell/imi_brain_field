@@ -6,3 +6,4 @@ Data and code for Campbell et al. Connecting the Pipes: Agricultural Tile Drains
 	Imi_brain_wetland.Rmd = analysis of imidacloprid in frog brains
 	Morphology_wetland.Rmd = analysis of body mass and length
 	Cerebellum_wetland_type.Rmd = analyses involving cerebellum brain size
+	sept21_water_quality.Rmd = analysis of pesticides in water samples
