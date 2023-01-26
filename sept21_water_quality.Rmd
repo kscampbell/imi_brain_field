@@ -6,7 +6,7 @@ output: html_document
 editor_options: 
   chunk_output_type: console
 ---
-Water quality models for IMI field study 2019 (completed 09/10/21)
+
 ```{r load packages}
 library(brms)
 library(dplyr)
@@ -23,9 +23,11 @@ library(bayesplot)
 # water data
 d <- read_csv("/Users/kaitlyncampbell/Documents/Chapter4_Brains_IMI/Field/water.csv")
 
+# remove non-detects from dataset
 d <- d %>% 
   select(-Lab_ID_String, -`%Dimoxystrobin`, -`%Metominostrobin`, -`%Nitenpyram`, -`%Terbutylazine`, -Project, -Trifloxystrobin, -Thiacloprid, -Pyraclostrobin, -Picoxystrobin, -Acetamiprid, -Dimethoate, -Dinotefuran)
 
+# reformat
 dd <- d %>% 
   gather(key = "Contaminant", value = "Water_ug_L", -Sample_ID, -Site, -Wetland_type, -Collection_Date, -Batch, -`Analysis Date`)
 
@@ -51,24 +53,10 @@ water_m13 <- brm(Water_ug_L ~ Wetland_type * Contaminant, data = dd, family = Ga
            seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
            save_pars = save_pars(all = TRUE))
 
-water_m13.1 <- brm(Water_ug_L ~ Wetland_type * Contaminant, data = dd, family = Gamma(link = "log"), 
-       prior=c(prior(normal(-4.4, 1), class=Intercept),
-                   prior(normal(-1, 0.5), class = b),
-                   prior(exponential(200), class="shape")),
-           iter = 2000 , warmup = 500, chains = 4, cores = 4,
-           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
-           save_pars = save_pars(all = TRUE))
-
-pp_check(water_m13.1, nsample=100)
-loo_13.1 <- loo(water_m13.1, save_psis = TRUE, cores = 2, moment_match = TRUE)
-print(loo_13.1) # ok = 2; p_loo = 4.6 ; se_loo = 1.0
-yrep <- posterior_predict(water_m13.1)
-ppc_loo_pit_overlay(dd$Water_ug_L, 
-                    yrep = yrep, 
-                    lw = weights(loo_13.1$psis_object))
+pp_check(water_m13, nsample=100)
 
 dd %>%
-  tidybayes::add_predicted_draws(model = water_m13.1, n = 100) %>%
+  tidybayes::add_predicted_draws(model = water_m13, n = 100) %>%
   ungroup() %>%
   ggplot(aes(x = .prediction, group = .draw)) +
   geom_line(stat = 'density',
@@ -90,13 +78,6 @@ ppc_stat(dd_neonic$Water_ug_L_1000, yrep = yrep, stat = "mean") # underestimates
 
 #load("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/imi_water_models/water_m13.rda")
 
-load("/Users/kaitlyncampbell/Documents/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/imi_water_models/water_m13.rda")
-
-print(water_m13, prior=T)
-plot(water_m13)
-conditional_effects(water_m13)        
-pp_check(water_m13)
-
 print(water_m13, prior=TRUE)
 plot(water_m13)
 pp_check(water_m13, type = "boxplot", notch=FALSE) # some values go up to 7.5
@@ -104,26 +85,6 @@ pp_check(water_m13, type="hist")
 pp_check(water_m13, nsamples=50)
 conditional_effects(water_m13)  # Back-transformed parameter estimates
 conditional_effects(water_m13, method='predict')  # Same, but for responses
-
-pp_check(water_m12, type = "dens_overlay", resp = "Water_ug_L")+xlim(0,1)
-pp_check(water_m12, type = "dens_overlay", resp = "Intercept", nsamples=100)+xlim(0,0.5)
-pp_check(water_m12, type = "dens_overlay", resp = "Wetland_typetile", nsamples=100)+xlim(0,0.5)
-
-dd %>%
-  tidybayes::add_predicted_draws(model = water_m13, ndraws = 100) %>%
-  ungroup() %>%
-  ggplot(aes(x = .prediction, group = .draw)) +
-  geom_line(stat = 'density',
-            alpha = 0.1,
-            colour = 'blue') +
-  geom_line(stat = 'density',
-            data = dd,
-            mapping = aes(x = Water_ug_L, group = NULL),
-            colour = 'black',
-            size = 1.5) +
-  scale_y_continuous(NULL, breaks = NULL) +
-  labs(x = expression(paste('Water quality density ')),
-       title = 'water_m13; Water quality density, actual versus predicted')
 
 loo_water_m13 <- loo(water_m13, save_psis = TRUE, cores = 2, moment_match = TRUE)
 print(loo_water_m13) # p_loo = 1.3 ; se_loo = 0.2
@@ -178,6 +139,7 @@ fit_tile_txm <- data.frame(value = exp(post_water$b_Intercept + post_water$b_Con
 # Tile / Metalaxyl 
 fit_tile_meta <- data.frame(value = exp(post_water$b_Intercept + post_water$b_ContaminantMetalaxyl + post_water$b_Wetland_typetile + post_water$`b_Wetland_typetile:ContaminantMetalaxyl`), type = "Tile", contaminant = "Metalaxyl", iter = 1:nrow(post_water))
 
+# bind
 mu_ref <- rbind(fit_ref_azo, fit_ref_clo, fit_ref_imi, fit_ref_txm, fit_ref_meta)
 mu_tile <- rbind(fit_tile_azo, fit_tile_clo, fit_tile_imi, fit_tile_txm, fit_tile_meta)
 mu_water <- rbind(mu_ref, mu_tile)
@@ -195,22 +157,6 @@ summary_water <- mu_water %>%
   mutate_if(is.numeric,round,3)
 summary_water
 ```
-  type       mean median    sd low89 high89
-1 Reference 0.006  0.004 0.007 0.001  0.018
-2 Tile      0.028  0.019 0.04  0.002  0.077
-
-   type      contaminant   mean median    sd low89 high89
- 1 Reference Azoxystrobin 0.013  0.011 0.007 0.006  0.026
- 2 Reference Clothianidin 0.005  0.003 0.006 0.001  0.013
- 3 Reference Imidacloprid 0.006  0.004 0.005 0.002  0.015
- 4 Reference Thiamethoxam 0.004  0.003 0.005 0.001  0.012
- 5 Reference Metalaxyl    0.002  0.001 0.002 0      0.005
- 
- 6 Tile      Azoxystrobin 0.027  0.022 0.019 0.009  0.058
- 7 Tile      Clothianidin 0.04   0.027 0.046 0.01   0.1  
- 8 Tile      Imidacloprid 0.032  0.019 0.045 0.006  0.094
- 9 Tile      Thiamethoxam 0.035  0.024 0.052 0.009  0.088
-10 Tile      Metalaxyl    0.007  0.004 0.013 0.001  0.022
 
 # cumulative neonic levels
 ```{r}
@@ -250,8 +196,6 @@ dd_neonic <- dd %>%
   filter(Contaminant == "Clothianidin" | Contaminant == "Imidacloprid" | Contaminant == "Thiamethoxam") 
 #View(dd_neonic)
 
-
-
 water_plot_neonic <- ggplot() + 
   geom_violin(data= mu_water_neonic, aes(x = type, y = value, fill = contaminant), position = "dodge") +
   geom_boxplot(data= mu_water_neonic, aes(x= type, y= value, fill= contaminant),
@@ -277,13 +221,7 @@ water_plot_neonic <- ggplot() +
   geom_hline(yintercept = 0.01, color="black", linetype = 'dashed') +
   geom_hline(yintercept = 0.05, color="#BF812D", linetype = 'dashed')
 water_plot_neonic
-
-RColorBrewer::display.brewer.pal(11, "BrBG")
-RColorBrewer::brewer.pal(11, "BrBG")
-
-#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot_neonic_dashed.tiff", water_plot_neonic, dpi=400, width=5, height=3, units="in")
 ```
-
 
 # figure option 1:
 ```{r}
@@ -309,8 +247,6 @@ water_plot1 <- ggplot() +
   theme(plot.caption = element_text(hjust = 0)) +
   scale_fill_manual(values=colorpalette)
 water_plot1
-
-#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot1.tiff", water_plot1, dpi=400, width=5, height=3, units="in")
 ```
 
 # figure option 2:
@@ -333,8 +269,6 @@ ggplot(aes(x = type, y = value, fill=contaminant)) +
        fill= "Contaminant") +
   theme_classic()
 water_plot2
-
-#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot2.tiff", water_plot2, dpi=400, width=5, height=3, units="in")
 ```
 
 # figure option 3:
@@ -369,10 +303,7 @@ water_plot_imi <- ggplot() +
     scale_fill_manual(values=cp) +
   theme(legend.position = "none")
 water_plot_imi
-
-#ggsave("/Users/kaitlyn.campbell/OneDrive - The University of South Dakota/Dissertation/Chapter4_Brains_IMI/Field/plots/water_plot_imi.tiff", water_plot_imi, dpi=400, width=5, height=3, units="in")
 ```
-
 
 # compare differences
 ```{r}
