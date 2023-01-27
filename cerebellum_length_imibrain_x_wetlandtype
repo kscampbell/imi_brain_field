@@ -1,0 +1,254 @@
+This analysis contains a subset of brains (n=30 instead of n=48) because we didn't have the funding to measure imidacloprid in all 48 brains
+
+# load packages
+```{r}
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(tibble)  
+library(tidyverse)
+library(devtools)
+library(rstan)
+library(rstantools)
+library(tidybayes)
+library(bayesplot)
+```
+
+# import data
+```{r}
+imi <- read_csv("/Users/kaitlyncampbell/Documents/USD/Chapter4_Brains_IMI/imi.csv")
+
+# make factors
+imi$Wetland_type <- as.factor(imi$Wetland_type)
+imi$Site <- as.factor(imi$Site)
+imi$Measurement <- as.factor(imi$Measurement)
+
+# add 0.000001 to all brain values so you can use a gamma distribution (gamma distributions don't allow 0s)
+imi <- imi %>% 
+  mutate(IMI_brain_ng_mg_protein = IMI_brain_ng_mg_protein + 0.000001)
+
+# filter so you only have cerebellum length measurements
+# multiple total body length measurements (TL) by 10 so the units are in mm
+# divide cerebellum length by TL to standardize for body size
+imi_cerebellum <- imi %>% 
+  filter(Measurement == '15_cerebellum_length') %>% 
+  mutate(Average_length_mm = (Average_length*10),
+         TL_mm = (TL_cm*10),
+         Length_mm_STD = (Average_length_mm/TL_mm))
+```
+
+# look at raw data
+```{r}
+plot(density(imi_cerebellum$Length_mm_STD))
+```
+
+# gamma distribution model + model checks:
+```{r mi16 model}
+mi16 <- brm(Length_mm_STD ~ IMI_brain_ng_mg_protein * Wetland_type, data = imi_cerebellum, family = Gamma(link = "log"), 
+           prior=c(prior(normal(-4.4, 1), class=Intercept),
+                   prior(normal(0, 1), class=b, coef="Wetland_typetile"),
+                   prior(normal(-1, 1), class = b, coef="IMI_brain_ng_mg_protein"),
+                   prior(normal(1, 1), class = b, coef="IMI_brain_ng_mg_protein:Wetland_typetile"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+# try a model without the interaction between [imi brain] and wetland type
+mi16.5 <- brm(Length_mm_STD ~ IMI_brain_ng_mg_protein, data = imi_cerebellum, family = Gamma(link = "log"), 
+           prior=c(prior(normal(-4.4, 1), class=Intercept),
+                   prior(normal(0, 1), class = b, coef="IMI_brain_ng_mg_protein"),
+                   prior(exponential(0.25), class="shape")),
+           iter = 2000 , warmup = 500, chains = 4, cores = 4,
+           seed = 5, control = list(adapt_delta = 0.999, max_treedepth=15),
+           save_pars = save_pars(all = TRUE))
+
+#save(mi16.5, file = "/Users/kaitlyncampbell/Documents/USD/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/mi16.5.rda")
+
+load("/Users/kaitlyncampbell/Documents/USD/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/mi16.5.rda")
+load("/Users/kaitlyncampbell/Documents/USD/Chapter4_Brains_IMI/Field/Bayes_code/saved_models/measurements_x_imi_brain/mi16.rda")
+
+# do this for both models (just switch out the names real quick)
+pp_check(mi16.5, ndraws=100)
+plot(conditional_effects(mi16.5), points = TRUE)
+print(mi16.5)
+
+plot(mi16)
+pp_check(mi16, nsample=100)
+plot(conditional_effects(mi16), points = TRUE)
+
+# pp checks
+pp_check(mi16.5, type = "boxplot", notch=FALSE)
+pp_check(mi16.5, type='stat', stat='mean')
+pp_check(mi16.5, type="hist")
+pp_check(mi16.5, nsamples=100)
+
+pp_check(mi16.5, type = "dens_overlay", resp = "Length_mm_STD", nsamples=100)
+pp_check(mi16, type = "dens_overlay", resp = "Intercept", nsamples=100)
+pp_check(mi16, type = "dens_overlay", resp = "Wetland_typetile", nsamples=100)
+pp_check(mi16, type = "dens_overlay", resp = "IMI_brain_ng_mg_protein", nsamples=100)
+
+# compare predictions vs actual values
+imi_cerebellum %>%
+  tidybayes::add_predicted_draws(model = mi16, ndraws = 100) %>%
+  ungroup() %>%
+  ggplot(aes(x = .prediction, group = .draw)) +
+  geom_line(stat = 'density',
+            alpha = 0.1,
+            colour = 'blue') +
+  geom_line(stat = 'density',
+            data = imi_cerebellum,
+            mapping = aes(x = Length_mm_STD, group = NULL),
+            colour = 'black',
+            size = 1.5) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(x = expression(paste('Length_mm_STD density ')),
+       title = 'Length_mm_STD density, actual versus predicted')
+
+# use loo to compare models
+loo_mi165 <- loo(mi16.5, save_psis = TRUE, cores = 2, moment_match = TRUE)
+print(loo_mi165) # ok=1 ; p_loo = 2.5 ; SE = 0.9
+print(loo_mi16) # ok=3 ; p_loo = 4.1 ; SE = 1.2
+
+yrep <- posterior_predict(mi16.5)
+ppc_loo_pit_overlay(imi_cerebellum$Length_mm_STD, 
+                    yrep = yrep, 
+                    lw = weights(loo_mi165$psis_object))
+# model is a little over-dispersed compared to our data --> use model mi16 instead of mi16.5
+
+ppc_intervals(imi_cerebellum$Length_mm_STD, yrep = yrep)
+ppc_stat(imi_cerebellum$Length_mm_STD, yrep = yrep, stat = "mean")
+ppc_stat(imi_cerebellum$Length_mm_STD, yrep = yrep, stat = "sd")
+ppc_stat_grouped(imi_cerebellum$Length_mm_STD, group=imi_cerebellum$Wetland_type, yrep = yrep, stat = "mean")
+ppc_stat_grouped(imi_cerebellum$Length_mm_STD, group=imi_cerebellum$Wetland_type, yrep = yrep, stat = "sd")
+```
+## Output:
+IMI_brain_ng_mg_protein: 1.07 [0.95 , 1.21]
+Wetland_typetile: 0.97 [0.66 , 1.43]
+IMI_brain_ng_mg_protein:Wetland_typetile: 0.90 [0.80 , 1.03]
+
+# Extract posteriors from model mi16
+```{r}
+post_mi16 <- posterior_samples(mi16)    # puts chains of model into data frame
+head(post_mi16)
+nrow(post_mi16) # 6000
+```
+
+```{r compute averages for post_m_cer2}
+as_tibble(post_mi16) %>% 
+  mutate(iteration = 1:nrow(post_mi16))
+
+# extract posteriors from reference sites
+r_cer <- data.frame(value = (exp(post_mi16$b_Intercept + post_mi16$b_IMI_brain_ng_mg_protein)), type = "Reference", iter = 1:nrow(post_mi16))
+
+# extract from tile sites
+t_cer <- data.frame(value = (exp(post_mi16$b_Intercept + post_mi16$b_IMI_brain_ng_mg_protein + post_mi16$b_Wetland_typetile + post_mi16$`b_IMI_brain_ng_mg_protein:Wetland_typetile`)), type = "Tile", iter = 1:nrow(post_mi16))
+
+# bind to create 1 dataframe
+cer_wtlnd <- rbind(r_cer, t_cer)
+#View(cer_wtlnd)
+```
+
+# summary stats from the posterior of model mi16
+# use 89% credible intervals
+```{r summary stats for cer_wtlnd}
+cer_wtlnd_summary <- cer_wtlnd %>% 
+  group_by(type) %>% 
+  summarize(mean = mean(value),
+            median = median(value),
+            sd = sd(value),
+            low89 = quantile(value, probs = 0.055),
+            high89 = quantile(value, probs = 0.945)) %>%
+  mutate_if(is.numeric,round,3)
+cer_wtlnd_summary
+```
+## output:
+  type        mean median     sd  low89 high89
+1 Reference 0.012  0.012 0.001 0.011  0.015
+2 Tile      0.011  0.011 0.001 0.009  0.013
+
+# Visualize probability mass - IMI_brain at ref and tile wetlands
+```{r}
+# add colors
+cp <- c("white", "grey55")
+
+imi_cerebellum$type2<-ifelse(imi_cerebellum$Wetland_type=="control", "Reference", "Tile")
+imi_cerebellum$type2 <- as.factor(imi_cerebellum$type2)
+
+cer_wtlnd_plot <- cer_wtlnd %>% 
+  ggplot(aes(x = type, y = value, fill = type)) +
+  geom_violin(position = "dodge") + 
+  #scale_y_log10() +
+  geom_boxplot(outlier.shape = NA, width = 0.1, position = position_dodge(0.9)) +
+  geom_jitter(data=imi_cerebellum, aes(x=type2, y=Length_mm_STD, fill=type2), shape=21, alpha=0.6, width=0.25) +
+  labs(x = "Wetland Type", 
+       y = "Cerebellum Length (mm)",
+       fill= "Wetland Type") +
+  theme(text= element_text(size=20), plot.title = element_text(face = "bold", hjust = 0.5), plot.caption = element_text(size=10)) +
+  theme_classic() + 
+  scale_fill_manual(values=cp) +
+  theme(plot.caption = element_text(hjust = 0, size=8))
+cer_wtlnd_plot
+
+# save plot
+#ggsave("/Users/kaitlyncampbell/Documents/USD/Chapter4_Brains_IMI/Field/plots/cer_wtlnd_plot.tiff", cer_wtlnd_plot, dpi=400, width=5, height=3, units="in")
+```
+
+# Visualize probability mass - Cerebellum length x IMI_brain at ref and tile wetlands
+```{r}
+cer_plot_imi <-conditional_effects(mi16, robust=FALSE)
+cer_plot_imi <- as.data.frame(cer_plot_imi$`IMI_brain_ng_mg_protein:Wetland_type`)
+
+# change names of wetland types from "control" to "Reference" and "tile" to "Tile" for the fig
+cer_plot_imi$effect2__ <- ifelse(cer_plot_imi$effect2__=="control", "Reference", "Tile")
+
+# add colors
+cp <- c("white", "grey22")
+
+# change names of wetland types from "control" to "Reference" and "tile" to "Tile" for the fig
+imi_cerebellum$type2<-ifelse(imi_cerebellum$Wetland_type=="control", "Reference", "Tile")
+imi_cerebellum$type2 <- as.factor(imi_cerebellum$type2)
+
+# facet_wrap header labels
+wetland.labs <- c("Reference", "Tile")
+names(wetland.labs) <- c("control", "tile")
+
+# plot
+cerebellum_imi_plot <- ggplot() +
+  geom_line(data=cer_plot_imi, aes(x=IMI_brain_ng_mg_protein, y=estimate__, color=effect2__), color="black") +
+  geom_ribbon(data=cer_plot_imi, aes(x=IMI_brain_ng_mg_protein, ymin=lower__, ymax=upper__, fill=effect2__), fill="grey50", alpha=0.2) + 
+  geom_point(data=imi_cerebellum, aes(x=IMI_brain_ng_mg_protein, y=Length_mm_STD, fill=Wetland_type), shape=21, alpha=0.6) + 
+  scale_y_log10() +
+  #scale_x_log10() +
+  labs(y="Cerebellum length (mm)", x= "Imidacloprid Brain Concentration (pg/mg protein)", color= "Wetland Type", fill= "Wetland Type") + 
+  theme_classic() + 
+  scale_fill_manual(values=cp, labels = c("Reference","Tile")) +
+  theme(axis.text.x = element_text(color="black", size="10")) +
+  theme(axis.text.y = element_text(color="black", size="10")) +
+  theme(legend.title = element_text(face="bold", size="10")) + facet_wrap(~Wetland_type, labeller = labeller(Wetland_type = wetland.labs))
+cerebellum_imi_plot
+```
+
+# probability of a difference btwn length at ref and tile sites
+```{r}
+diff <- (r_cer$value) - (t_cer$value)
+mean(diff)  # 0.001503717
+sd(diff) # 0.001858513
+quantile(diff,probs=c(0.055,0.945))  # (-0.001483469 , 0.004422562) --> indicates cerebellum length at ref and tile wetlands are NOT different (keep in mind this was only a subset of all brains measured - 30 brains out of 48 total)
+sum(diff>0)/6000  # 0.8021667
+```
+
+# get slopes for ref and tile wetlands
+```{r}
+## Reference wetlands
+sum(r_cer$value>0)/6000 # probability slope is greater than zero = >0.99
+quantile(r_cer$value, probs=c(0.055,0.5,0.945)) 
+#      5.5%        50%      94.5% 
+#  0.01059440 0.01237215 0.01462272  
+
+## Tile wetlands
+sum(t_cer$value>0)/6000 # probability slope is greater than zero = >0.99
+quantile(t_cer$value, probs=c(0.055,0.5,0.945)) 
+#      5.5%        50%      94.5% 
+# 0.008967293 0.010841985 0.013263724 
+```
