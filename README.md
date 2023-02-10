@@ -1,5 +1,5 @@
 # imi_brain_field
-Data and code for Campbell et al. 2023. Connecting the Pipes: Agricultural Tile Drains and Elevated Imidacloprid Brain Concentrations in Juvenile Northern Leopard Frogs (Rana pipiens). doi:
+Data and code for Campbell et al. 2023. Connecting the Pipes: Agricultural Tile Drains and Elevated Imidacloprid Brain Concentrations in Juvenile Northern Leopard Frogs (Rana pipiens). doi: 10.1021/acs.est.2c06527
 
 
 	IMI_liver_analysis.Rmd = analysis of imidacloprid + metabolites in frog livers
